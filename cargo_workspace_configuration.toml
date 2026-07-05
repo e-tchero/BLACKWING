@@ -1,0 +1,13 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/bw-core",
+    "crates/bw-protocol",
+]
+
+[workspace.dependencies]
+bytemuck = { version = "1.16", features = ["derive"] }
+serde = { version = "1.0", features = ["derive"] }
+ciborium = "0.2"
+zeroize = { version = "1.8", features = ["zeroize_derive"] }
+tokio = { version = "1.38", features = ["full"] }

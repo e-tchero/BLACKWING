@@ -1,0 +1,588 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Project Blackwing | Phase 1 Discovery</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+        
+        :root {
+            --bg-main: #fcfaf7;
+            --sidebar-bg: #f3eee7;
+            --accent-primary: #4a5568;
+            --accent-soft: #a0aec0;
+            --text-main: #2d3748;
+            --card-bg: #ffffff;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-main);
+            color: var(--text-main);
+            overflow-x: hidden;
+        }
+
+        .chart-container {
+            position: relative;
+            width: 100%;
+            max-width: 700px;
+            margin-left: auto;
+            margin-right: auto;
+            height: 320px;
+            max-height: 400px;
+        }
+
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 4px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: var(--accent-soft);
+            border-radius: 10px;
+        }
+
+        .nav-item.active {
+            background-color: var(--card-bg);
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+            font-weight: 600;
+            color: #000;
+        }
+
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.7);
+            backdrop-filter: blur(8px);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+        }
+
+        .routing-node {
+            border: 2px solid var(--accent-primary);
+            padding: 0.75rem;
+            border-radius: 0.5rem;
+            font-size: 0.8rem;
+            text-align: center;
+            background: white;
+            z-index: 10;
+        }
+
+        .flow-line {
+            height: 2px;
+            background: var(--accent-soft);
+            flex-grow: 1;
+            position: relative;
+        }
+
+        .flow-line::after {
+            content: '▶';
+            position: absolute;
+            right: -2px;
+            top: -7px;
+            font-size: 10px;
+            color: var(--accent-soft);
+        }
+    </style>
+</head>
+<body class="flex flex-col md:flex-row h-screen overflow-hidden">
+
+    <!-- Chosen Palette: Warm Sand & Slate (fcfaf7, f3eee7, 4a5568) -->
+    <!-- Application Structure Plan: 
+        The SPA is designed as a "Product Intelligence Hub". 
+        1. Navigation: A fixed sidebar for non-linear access to the five core report domains (Landscape, Pricing, Protocols, Security, Blueprint).
+        2. Content Flow: Each section starts with an executive summary paragraph to provide context before diving into interactive data.
+        3. Interactivity: Uses Chart.js for pricing and performance benchmarking, custom HTML/CSS for routing visualization, and dynamic "CVE Cards" for the security audit. 
+        This allows technical users to drill into specific protocol mechanics while business stakeholders can focus on the market gap and pricing sections.
+    -->
+    <!-- Visualization & Content Choices:
+        - Competitor Landscape -> Goal: Profile incumbents -> Method: Interactive Grid of Cards -> Interaction: Click to show detailed weaknesses.
+        - Pricing Data -> Goal: Compare TCO -> Method: Bar Chart (Chart.js) -> Context: Annual cost for 10 users.
+        - Network Routing -> Goal: Explain traversal -> Method: Structured HTML Flow Diagrams -> Justification: No SVG, cleaner layout control.
+        - Security Audit -> Goal: Highlight vulnerabilities -> Method: Comparison Grid (CVE vs Blackwing Solution).
+        - Performance Targets -> Goal: Set Benchmarks -> Method: Horizontal Radar/Bar hybrid (Chart.js).
+        - CONFIRMATION: NO SVG graphics used. NO Mermaid JS used.
+    -->
+
+    <!-- Sidebar Navigation -->
+    <nav class="w-full md:w-64 bg-[#f3eee7] flex-shrink-0 flex flex-col border-r border-stone-200 z-50">
+        <div class="p-6">
+            <div class="flex items-center space-x-2">
+                <div class="w-8 h-8 bg-black rounded flex items-center justify-center text-white font-bold text-xl">B</div>
+                <h1 class="text-xl font-bold tracking-tight">BLACKWING</h1>
+            </div>
+            <p class="text-[10px] text-stone-500 mt-1 uppercase tracking-widest font-semibold">Phase 1 Discovery Report</p>
+        </div>
+
+        <div class="flex-grow overflow-y-auto px-4 space-y-2 custom-scrollbar">
+            <button onclick="showSection('landscape')" id="nav-landscape" class="nav-item active w-full text-left px-4 py-3 rounded-lg text-sm transition-all flex items-center space-x-3">
+                <span>Market Landscape</span>
+            </button>
+            <button onclick="showSection('pricing')" id="nav-pricing" class="nav-item w-full text-left px-4 py-3 rounded-lg text-sm transition-all flex items-center space-x-3">
+                <span>Commercial Metrics</span>
+            </button>
+            <button onclick="showSection('protocols')" id="nav-protocols" class="nav-item w-full text-left px-4 py-3 rounded-lg text-sm transition-all flex items-center space-x-3">
+                <span>Protocol Reverse Engineering</span>
+            </button>
+            <button onclick="showSection('security')" id="nav-security" class="nav-item w-full text-left px-4 py-3 rounded-lg text-sm transition-all flex items-center space-x-3">
+                <span>Security & CVE Audit</span>
+            </button>
+            <button onclick="showSection('blueprint')" id="nav-blueprint" class="nav-item w-full text-left px-4 py-3 rounded-lg text-sm transition-all flex items-center space-x-3 text-stone-900 border border-stone-300">
+                <span>Blackwing Blueprint</span>
+            </button>
+        </div>
+
+        <div class="p-6 border-t border-stone-200">
+            <div class="bg-stone-800 rounded-lg p-4 text-white">
+                <p class="text-xs opacity-70">Target Version</p>
+                <p class="text-sm font-bold">V0.1 (Architecture)</p>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Content Area -->
+    <main class="flex-grow overflow-y-auto bg-[#fcfaf7] custom-scrollbar">
+        
+        <!-- Header -->
+        <header class="sticky top-0 glass-panel px-8 py-4 flex justify-between items-center z-40">
+            <h2 id="section-title" class="text-lg font-semibold text-stone-800">Market Landscape</h2>
+            <div class="flex items-center space-x-4 text-xs font-medium text-stone-500 uppercase tracking-tighter">
+                <span>Discovery</span>
+                <span>/</span>
+                <span id="breadcrumb">Section 1.1</span>
+            </div>
+        </header>
+
+        <div class="p-8 max-w-6xl mx-auto">
+            
+            <!-- SECTION: Market Landscape -->
+            <section id="section-landscape" class="content-section space-y-8">
+                <div class="max-w-3xl">
+                    <h3 class="text-3xl font-bold text-stone-900 mb-4">Competitor Intelligence</h3>
+                    <p class="text-stone-600 leading-relaxed">
+                        The global remote access market is currently defined by architectural transition. Incumbent solutions (TeamViewer, AnyDesk) are facing attrition due to monetization heuristics and security breaches. This landscape analysis evaluates the technical strengths and commercial vulnerabilities of the primary market actors to define Project Blackwing's entry vector.
+                    </p>
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                    <div class="bg-white p-6 rounded-xl border border-stone-200 shadow-sm hover:shadow-md transition-shadow">
+                        <div class="flex justify-between items-start mb-4">
+                            <h4 class="font-bold text-lg">TeamViewer</h4>
+                            <span class="text-[10px] bg-stone-100 px-2 py-1 rounded">Enterprise Standard</span>
+                        </div>
+                        <p class="text-sm text-stone-600 mb-4">Proprietary closed-source protocol. Bills based on named users and concurrent channels.</p>
+                        <div class="space-y-2">
+                            <div class="text-xs font-semibold uppercase text-red-600">Primary Vulnerability:</div>
+                            <p class="text-xs text-stone-500 italic">Aggressive "Commercial Use" detection engine resulting in false-positive lockouts.</p>
+                        </div>
+                    </div>
+
+                    <div class="bg-white p-6 rounded-xl border border-stone-200 shadow-sm hover:shadow-md transition-shadow">
+                        <div class="flex justify-between items-start mb-4">
+                            <h4 class="font-bold text-lg">AnyDesk</h4>
+                            <span class="text-[10px] bg-stone-100 px-2 py-1 rounded">Performance Focused</span>
+                        </div>
+                        <p class="text-sm text-stone-600 mb-4">Uses DeskRT codec for high-contrast GUI compression. 60 FPS standard.</p>
+                        <div class="space-y-2">
+                            <div class="text-xs font-semibold uppercase text-red-600">Primary Vulnerability:</div>
+                            <p class="text-xs text-stone-500 italic">Major 2024 security breach compromising code-signing keys and source code.</p>
+                        </div>
+                    </div>
+
+                    <div class="bg-white p-6 rounded-xl border border-stone-200 shadow-sm hover:shadow-md transition-shadow">
+                        <div class="flex justify-between items-start mb-4">
+                            <h4 class="font-bold text-lg">Splashtop</h4>
+                            <span class="text-[10px] bg-stone-100 px-2 py-1 rounded">Value Segment</span>
+                        </div>
+                        <p class="text-sm text-stone-600 mb-4">High performance (240 FPS) with competitive tiered pricing. Uses TLS/AES-256.</p>
+                        <div class="space-y-2">
+                            <div class="text-xs font-semibold uppercase text-stone-400">Primary Vulnerability:</div>
+                            <p class="text-xs text-stone-500 italic">Complex tier-based feature gating (SOS vs Enterprise vs Performance).</p>
+                        </div>
+                    </div>
+                    
+                    <div class="bg-white p-6 rounded-xl border border-stone-200 shadow-sm hover:shadow-md transition-shadow">
+                        <div class="flex justify-between items-start mb-4">
+                            <h4 class="font-bold text-lg">RustDesk</h4>
+                            <span class="text-[10px] bg-stone-100 px-2 py-1 rounded">OSS / Self-Hosted</span>
+                        </div>
+                        <p class="text-sm text-stone-600 mb-4">Rust backend, Flutter frontend. Native self-hosting using hbbs/hbbr daemons.</p>
+                        <div class="space-y-2">
+                            <div class="text-xs font-semibold uppercase text-red-600">Primary Vulnerability:</div>
+                            <p class="text-xs text-stone-500 italic">Lacks native multi-tenancy and granular audit logging; recent cryptographic design flaws.</p>
+                        </div>
+                    </div>
+
+                    <div class="bg-white p-6 rounded-xl border border-stone-200 shadow-sm hover:shadow-md transition-shadow">
+                        <div class="flex justify-between items-start mb-4">
+                            <h4 class="font-bold text-lg">Chrome RD</h4>
+                            <span class="text-[10px] bg-stone-100 px-2 py-1 rounded">Browser Native</span>
+                        </div>
+                        <p class="text-sm text-stone-600 mb-4">Leverages WebRTC for low-latency sandboxed streaming via Google infrastructure.</p>
+                        <div class="space-y-2">
+                            <div class="text-xs font-semibold uppercase text-stone-400">Primary Vulnerability:</div>
+                            <p class="text-xs text-stone-500 italic">No enterprise orchestration, terminal utilities, or advanced file-system support.</p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- SECTION: Pricing Metrics -->
+            <section id="section-pricing" class="content-section hidden space-y-8">
+                <div class="max-w-3xl">
+                    <h3 class="text-3xl font-bold text-stone-900 mb-4">Commercial Benchmarking</h3>
+                    <p class="text-stone-600 leading-relaxed">
+                        Licensing models in the current market are polarized between high-overhead enterprise subscriptions and low-cost alternative tiers. This section visualizes the annual cost disparity for a standardized 10-user team, highlighting the "pricing trap" set by incumbents.
+                    </p>
+                </div>
+
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-8 items-start">
+                    <div class="bg-white p-8 rounded-2xl border border-stone-200 shadow-sm">
+                        <h4 class="font-bold text-stone-800 mb-6 flex items-center space-x-2">
+                            <span class="w-2 h-2 bg-stone-400 rounded-full"></span>
+                            <span>Annual Team Cost (10 Users, USD)</span>
+                        </h4>
+                        <div class="chart-container">
+                            <canvas id="pricingChart"></canvas>
+                        </div>
+                        <p class="text-xs text-stone-400 mt-6 text-center italic">Calculated based on Business/Pro tier annual median spend.</p>
+                    </div>
+
+                    <div class="space-y-6">
+                        <div class="bg-stone-50 p-6 rounded-xl border border-stone-200">
+                            <h5 class="font-bold text-sm uppercase text-stone-500 mb-4 tracking-wider">Licensing Insights</h5>
+                            <div class="space-y-4">
+                                <div class="flex justify-between items-center border-b border-stone-200 pb-2">
+                                    <span class="text-sm font-medium">TeamViewer Metric</span>
+                                    <span class="text-xs bg-white px-2 py-1 rounded border">Per User + Concurrent Channels</span>
+                                </div>
+                                <div class="flex justify-between items-center border-b border-stone-200 pb-2">
+                                    <span class="text-sm font-medium">AnyDesk Metric</span>
+                                    <span class="text-xs bg-white px-2 py-1 rounded border">Managed Endpoints + Conn. Base</span>
+                                </div>
+                                <div class="flex justify-between items-center border-b border-stone-200 pb-2">
+                                    <span class="text-sm font-medium">Splashtop Metric</span>
+                                    <span class="text-xs bg-white px-2 py-1 rounded border">Per User / 10 Endpoints</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="p-6 bg-stone-900 rounded-xl text-white">
+                            <h5 class="font-bold text-lg mb-2">Blackwing Strategy</h5>
+                            <p class="text-sm opacity-80 leading-relaxed">
+                                Avoid the "channel" billing trap. Implement endpoint-based pricing with transparent self-hosted tiers to disrupt TeamViewer's median $2,250 annual cost.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- SECTION: Protocols -->
+            <section id="section-protocols" class="content-section hidden space-y-8">
+                <div class="max-w-3xl">
+                    <h3 class="text-3xl font-bold text-stone-900 mb-4">Transport Layer Architecture</h3>
+                    <p class="text-stone-600 leading-relaxed">
+                        Achieving sub-40ms startup and sub-50ms latency requires an evolution beyond legacy TCP-based protocols. We analyzed RDP, WebRTC, and the emerging Media over QUIC (MoQ) standards to define Blackwing's transport stack.
+                    </p>
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
+                    <div class="bg-white p-6 rounded-xl border border-stone-200 shadow-sm">
+                        <h4 class="font-bold mb-4">Protocol Performance Metrics</h4>
+                        <div class="space-y-4">
+                            <div>
+                                <div class="flex justify-between text-xs mb-1">
+                                    <span>RDP (Legacy TCP)</span>
+                                    <span class="text-red-500">Poor (Head-of-Line Blocking)</span>
+                                </div>
+                                <div class="w-full bg-stone-100 h-2 rounded-full overflow-hidden">
+                                    <div class="bg-stone-300 h-full w-1/3"></div>
+                                </div>
+                            </div>
+                            <div>
+                                <div class="flex justify-between text-xs mb-1">
+                                    <span>WebRTC (RTP/UDP)</span>
+                                    <span class="text-stone-500">Good (Complex Signaling)</span>
+                                </div>
+                                <div class="w-full bg-stone-100 h-2 rounded-full overflow-hidden">
+                                    <div class="bg-stone-500 h-full w-3/4"></div>
+                                </div>
+                            </div>
+                            <div>
+                                <div class="flex justify-between text-xs mb-1">
+                                    <span>Blackwing (MoQ/QUIC)</span>
+                                    <span class="text-stone-800 font-bold">Optimal (0-RTT Handshake)</span>
+                                </div>
+                                <div class="w-full bg-stone-100 h-2 rounded-full overflow-hidden">
+                                    <div class="bg-stone-900 h-full w-[95%]"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="bg-white p-6 rounded-xl border border-stone-200 shadow-sm flex flex-col justify-center items-center">
+                        <h4 class="font-bold mb-6 w-full text-left text-sm uppercase text-stone-500">Typical Routing (RustDesk-Style)</h4>
+                        <div class="flex flex-col items-center space-y-4 w-full">
+                            <div class="routing-node w-40">Client A</div>
+                            <div class="flex items-center w-full px-12">
+                                <div class="flow-line"></div>
+                                <div class="routing-node mx-2 text-[10px] bg-stone-50 px-2">Rendezvous (hbbs)</div>
+                                <div class="flow-line"></div>
+                            </div>
+                            <div class="routing-node w-40">Client B</div>
+                            <div class="text-[10px] bg-red-50 text-red-700 px-3 py-2 rounded-md border border-red-100 mt-4">
+                                P2P Direct Fails? -> Fallback to <strong>Relay (hbbr)</strong>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="bg-stone-50 p-8 rounded-2xl border border-stone-200">
+                    <h4 class="font-bold mb-4">Why QUIC (Media over QUIC)?</h4>
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                        <div class="space-y-2">
+                            <div class="text-stone-900 font-bold">No HOL Blocking</div>
+                            <p class="text-xs text-stone-500">Unlike TCP, QUIC streams are independent. One lost packet doesn't stall the entire screen update.</p>
+                        </div>
+                        <div class="space-y-2">
+                            <div class="text-stone-900 font-bold">0-RTT Resume</div>
+                            <p class="text-xs text-stone-500">Clients resume sessions in under 40ms by bypassing the initial TLS handshake on repeat connections.</p>
+                        </div>
+                        <div class="space-y-2">
+                            <div class="text-stone-900 font-bold">Port 443 Multiplexing</div>
+                            <p class="text-xs text-stone-500">Blackwing's Go-based relay inspects the first byte to serve both TCP and TLS on a single port to bypass DPI.</p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- SECTION: Security -->
+            <section id="section-security" class="content-section hidden space-y-8">
+                <div class="max-w-3xl">
+                    <h3 class="text-3xl font-bold text-stone-900 mb-4">Security & Vulnerability Audit</h3>
+                    <p class="text-stone-600 leading-relaxed">
+                        Project Blackwing's security posture is built on an audit of competitor failures. We examined major CVEs from 2024-2026 to ensure our architecture is resilient against static nonces, predictable keys, and privilege escalation.
+                    </p>
+                </div>
+
+                <div class="space-y-4">
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div class="bg-white p-6 rounded-xl border-l-4 border-l-red-400 border border-stone-200 shadow-sm">
+                            <div class="text-xs font-bold text-red-500 mb-1">CVE-2026-30785 (RustDesk)</div>
+                            <h5 class="font-bold mb-2">Static Nonce Attack</h5>
+                            <p class="text-sm text-stone-600 mb-4">Used twenty-four zero bytes as a nonce with predictable machine UUIDs, allowing local credential decryption.</p>
+                            <div class="text-xs bg-green-50 text-green-700 p-2 rounded">
+                                <strong>Blackwing Fix:</strong> ChaCha20-Poly1305 with unique 96-bit nonces derived from active system entropy.
+                            </div>
+                        </div>
+
+                        <div class="bg-white p-6 rounded-xl border-l-4 border-l-red-400 border border-stone-200 shadow-sm">
+                            <div class="text-xs font-bold text-red-500 mb-1">CVE-2024-52940 (AnyDesk)</div>
+                            <h5 class="font-bold mb-2">IP Leak via Handshake</h5>
+                            <h5 class="font-bold mb-2">IP Leak via Handshake</h5>
+                            <p class="text-sm text-stone-600 mb-4">Direct connection handshake leaked the client's public IP address via AnyDesk ID packets.</p>
+                            <div class="text-xs bg-green-50 text-green-700 p-2 rounded">
+                                <strong>Blackwing Fix:</strong> Blinded Handshake Negotiation (SRP-6a) ensuring no identifiable IP data is shared without authorization.
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="bg-stone-100 p-6 rounded-xl border border-stone-200">
+                        <h4 class="font-bold mb-4">Community Frustration Feedback Loop</h4>
+                        <div class="flex flex-col md:flex-row justify-between items-center space-y-4 md:space-y-0 md:space-x-4">
+                            <div class="bg-white p-3 rounded shadow-sm text-xs text-center flex-1">Intrusive Heuristics / Commercial Flags</div>
+                            <div class="hidden md:block text-stone-400">→</div>
+                            <div class="bg-white p-3 rounded shadow-sm text-xs text-center flex-1">5-Minute Timeouts & Penalties</div>
+                            <div class="hidden md:block text-stone-400">→</div>
+                            <div class="bg-white p-3 rounded shadow-sm text-xs text-center flex-1">User Attrition toward Open Source</div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- SECTION: Blueprint -->
+            <section id="section-blueprint" class="content-section hidden space-y-8">
+                <div class="max-w-3xl">
+                    <h3 class="text-3xl font-bold text-stone-900 mb-4">The Project Blackwing Blueprint</h3>
+                    <p class="text-stone-600 leading-relaxed">
+                        Project Blackwing is not just a "better TeamViewer"; it is a remote computing ecosystem. By pairing an advanced QUIC transport engine with a Zero-Trust control plane, we target industry-leading startup times and power efficiency.
+                    </p>
+                </div>
+
+                <div class="bg-white p-8 rounded-2xl border border-stone-200 shadow-sm">
+                    <h4 class="font-bold mb-6">Quantitative Engineering Targets</h4>
+                    <div class="chart-container">
+                        <canvas id="performanceChart"></canvas>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div class="bg-stone-900 text-white p-6 rounded-xl shadow-lg">
+                        <h5 class="font-bold text-lg mb-4">Core Tech Stack</h5>
+                        <ul class="text-sm space-y-3 opacity-90">
+                            <li class="flex justify-between"><span>Control Plane</span> <span class="font-mono text-xs">Unified SaaS / Go</span></li>
+                            <li class="flex justify-between"><span>Relay Engine</span> <span class="font-mono text-xs">Rust / QUIC (MoQ)</span></li>
+                            <li class="flex justify-between"><span>Agent Service</span> <span class="font-mono text-xs">Sandboxed C++/Rust</span></li>
+                            <li class="flex justify-between"><span>Auth Layer</span> <span class="font-mono text-xs">Argon2id + SRP-6a</span></li>
+                            <li class="flex justify-between"><span>Video Codec</span> <span class="font-mono text-xs">H.265 / AV1 / WebCodecs</span></li>
+                        </ul>
+                    </div>
+
+                    <div class="bg-[#f3eee7] p-6 rounded-xl border border-stone-300">
+                        <h5 class="font-bold text-stone-800 mb-4">Strategic Roadmap</h5>
+                        <div class="space-y-4">
+                            <div class="flex items-start space-x-3">
+                                <div class="w-6 h-6 rounded-full bg-white flex-shrink-0 flex items-center justify-center font-bold text-xs">1</div>
+                                <div>
+                                    <div class="font-bold text-sm">E2EE Core</div>
+                                    <div class="text-xs text-stone-500">Deploy Argon2id and dual-nonce handshakes.</div>
+                                </div>
+                            </div>
+                            <div class="flex items-start space-x-3">
+                                <div class="w-6 h-6 rounded-full bg-white flex-shrink-0 flex items-center justify-center font-bold text-xs">2</div>
+                                <div>
+                                    <div class="font-bold text-sm">MoQ Architecture</div>
+                                    <div class="text-xs text-stone-500">Implement userspace QUIC for sub-50ms latency.</div>
+                                </div>
+                            </div>
+                            <div class="flex items-start space-x-3 opacity-50">
+                                <div class="w-6 h-6 rounded-full bg-white flex-shrink-0 flex items-center justify-center font-bold text-xs">3</div>
+                                <div>
+                                    <div class="font-bold text-sm">Enterprise Control Plane</div>
+                                    <div class="text-xs text-stone-500">Multi-tenant SaaS with immutable audit logging.</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+        </div>
+
+        <footer class="p-8 border-t border-stone-200 mt-12 text-center text-stone-400 text-xs">
+            <p>&copy; 2026 Project Blackwing. All information contained herein is Confidential Phase 1 Discovery material.</p>
+        </footer>
+    </main>
+
+    <script>
+        // --- Navigation Logic ---
+        function showSection(sectionId) {
+            // Hide all sections
+            document.querySelectorAll('.content-section').forEach(section => {
+                section.classList.add('hidden');
+            });
+            // Show selected section
+            document.getElementById('section-' + sectionId).classList.remove('hidden');
+
+            // Update Nav styles
+            document.querySelectorAll('.nav-item').forEach(item => {
+                item.classList.remove('active');
+            });
+            document.getElementById('nav-' + sectionId).classList.add('active');
+
+            // Update Breadcrumbs and Title
+            const titles = {
+                'landscape': 'Market Landscape',
+                'pricing': 'Commercial Metrics',
+                'protocols': 'Protocol Reverse Engineering',
+                'security': 'Security & CVE Audit',
+                'blueprint': 'Blackwing Blueprint'
+            };
+            const breadcrumbs = {
+                'landscape': 'Section 1.1',
+                'pricing': 'Section 1.2',
+                'protocols': 'Section 2.1',
+                'security': 'Section 3.2',
+                'blueprint': 'Section 4.2'
+            };
+            document.getElementById('section-title').innerText = titles[sectionId];
+            document.getElementById('breadcrumb').innerText = breadcrumbs[sectionId];
+
+            // Re-render charts to fix responsive sizing if needed
+            if (sectionId === 'pricing') renderPricingChart();
+            if (sectionId === 'blueprint') renderPerformanceChart();
+        }
+
+        // --- Data & Charts ---
+        let pricingChartInstance = null;
+        function renderPricingChart() {
+            const ctx = document.getElementById('pricingChart').getContext('2d');
+            if (pricingChartInstance) pricingChartInstance.destroy();
+
+            pricingChartInstance = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: ['Splashtop', 'AnyDesk', 'GoToResolve', 'TeamViewer'],
+                    datasets: [{
+                        label: 'Annual Median Cost (10 Users)',
+                        data: [700, 1000, 1750, 2250],
+                        backgroundColor: ['#cbd5e0', '#718096', '#4a5568', '#1a202c'],
+                        borderRadius: 6,
+                        maxBarThickness: 40
+                    }]
+                },
+                options: {
+                    maintainAspectRatio: false,
+                    indexAxis: 'y',
+                    plugins: {
+                        legend: { display: false }
+                    },
+                    scales: {
+                        x: { grid: { display: false }, ticks: { font: { size: 10 } } },
+                        y: { grid: { display: false }, ticks: { font: { size: 10, weight: 'bold' } } }
+                    }
+                }
+            });
+        }
+
+        let performanceChartInstance = null;
+        function renderPerformanceChart() {
+            const ctx = document.getElementById('performanceChart').getContext('2d');
+            if (performanceChartInstance) performanceChartInstance.destroy();
+
+            performanceChartInstance = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: ['Session Startup (ms)', 'End-to-End Latency (ms)', 'Mobile Power (%/hr)'],
+                    datasets: [
+                        {
+                            label: 'Blackwing (Target)',
+                            data: [350, 50, 6],
+                            backgroundColor: '#2d3748'
+                        },
+                        {
+                            label: 'RustDesk (Typical)',
+                            data: [1800, 85, 12],
+                            backgroundColor: '#a0aec0'
+                        },
+                        {
+                            label: 'Chrome RD (WebRTC)',
+                            data: [2300, 87, 8],
+                            backgroundColor: '#cbd5e0'
+                        }
+                    ]
+                },
+                options: {
+                    maintainAspectRatio: false,
+                    responsive: true,
+                    plugins: {
+                        legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 10 } } }
+                    },
+                    scales: {
+                        x: { grid: { display: false }, ticks: { font: { size: 10 } } },
+                        y: { grid: { color: '#f3eee7' }, ticks: { font: { size: 10 } } }
+                    }
+                }
+            });
+        }
+
+        // Initialize first section
+        document.addEventListener('DOMContentLoaded', () => {
+            showSection('landscape');
+        });
+    </script>
+    
+    <!-- CONFIRMATION: NO SVG graphics used. NO Mermaid JS used. -->
+</body>
+</html>
