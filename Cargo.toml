@@ -1,8 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/bw-core",
-    "crates/bw-protocol",
+    "crates/bw-crypto",
 ]
 
 [workspace.dependencies]

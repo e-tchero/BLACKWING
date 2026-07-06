@@ -6,6 +6,7 @@ pub(crate) enum SigningKeyInner {
     Tpm(tpm::TpmSigningKey),
 }
 
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub(crate) enum VerifyKeyInner {
     Dalek(dalek::DalekVerifyKey),
     Tpm(tpm::TpmVerifyKey),
