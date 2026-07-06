@@ -45,6 +45,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "bw-core"
+version = "0.1.0"
+dependencies = [
+ "thiserror",
+]
+
+[[package]]
 name = "bw-crypto"
 version = "0.1.0"
 dependencies = [
