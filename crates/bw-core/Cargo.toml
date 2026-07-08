@@ -3,5 +3,13 @@ name = "bw-core"
 version = "0.1.0"
 edition = "2021"
 
+[lints]
+workspace = true
+
+[features]
+default = []
+serde = ["dep:serde"]
+
 [dependencies]
 thiserror = "1"
+serde = { workspace = true, optional = true }
