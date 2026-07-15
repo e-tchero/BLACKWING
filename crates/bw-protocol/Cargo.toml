@@ -11,6 +11,8 @@ thiserror = "1"
 zeroize = { workspace = true }
 bytemuck = { workspace = true }
 ciborium = "0.2"
+tokio = { workspace = true }
+futures = "0.3"
 
 [[bench]]
 name = "placeholder"
