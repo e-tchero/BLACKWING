@@ -20,4 +20,12 @@ pub enum ProtocolError {
     /// The payload length specified exceeds the maximum limit or is malformed.
     #[error("Invalid payload length")]
     InvalidPayloadLength,
+
+    /// Capabilities negotiation failed due to incompatible feature sets.
+    #[error("Incompatible connection capabilities")]
+    IncompatibleCapabilities,
+
+    /// Handshake validation failed.
+    #[error("Invalid protocol handshake")]
+    InvalidHandshake,
 }
