@@ -12,7 +12,7 @@ pub const PROTOCOL_MAGIC: [u8; 4] = [0x42, 0x57, 0x50, 0x47];
 /// Implements `bytemuck::Pod` and `bytemuck::Zeroable` to safely permit
 /// zero-copy casting from arbitrary byte slices.
 #[repr(C, align(8))]
-#[derive(Copy, Clone, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct PacketHeader {
     /// Protocol magic identifier.
     pub magic: [u8; 4],
