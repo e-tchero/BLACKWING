@@ -36,4 +36,20 @@ pub enum ProtocolError {
     /// General protocol deserialization failure.
     #[error("Deserialization failed")]
     DeserializationError,
+
+    /// Duplicate session ID detected.
+    #[error("Session already exists")]
+    SessionDuplicate,
+
+    /// Lookup of non-existent session failed.
+    #[error("Session not found")]
+    SessionNotFound,
+
+    /// Routing configuration validation failed.
+    #[error("Invalid route configuration")]
+    InvalidRoute,
+
+    /// The destination node is invalid for this route.
+    #[error("Invalid message destination")]
+    InvalidDestination,
 }
