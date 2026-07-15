@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! Zero-copy buffer casting primitives.
 //!
 //! Provides safely implemented zero-allocation casting of memory buffers
@@ -24,23 +23,23 @@ pub enum BufferError {
 /// zero-copy casting from arbitrary byte slices.
 #[repr(C, align(8))]
 #[derive(Copy, Clone, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
-pub(crate) struct PacketHeader {
+pub struct PacketHeader {
     /// Protocol schema version.
-    pub(crate) schema_version: u16,
+    pub schema_version: u16,
     /// Protocol flags bitmask.
-    pub(crate) flags: u16,
+    pub flags: u16,
     /// Application-defined packet type identifier.
-    pub(crate) packet_type: u16,
+    pub packet_type: u16,
     /// Length of the payload following this header.
-    pub(crate) payload_length: u16,
+    pub payload_length: u16,
     /// Packet sequence number.
-    pub(crate) sequence_number: u32,
+    pub sequence_number: u32,
     /// Padding for 8-byte structural alignment.
-    pub(crate) padding: u32,
+    pub padding: u32,
     /// Cryptographically secure run epoch identifier.
-    pub(crate) session_epoch: u64,
+    pub session_epoch: u64,
     /// Monotonic microsecond timestamp of packet generation.
-    pub(crate) monotonic_timestamp: u64,
+    pub monotonic_timestamp: u64,
 }
 
 impl PacketHeader {
@@ -54,7 +53,7 @@ impl PacketHeader {
     ///
     /// Returns a shared reference to the structured `PacketHeader`, or a
     /// `BufferError` if the slice is too small to contain the struct.
-    pub(crate) fn try_from_bytes(bytes: &[u8]) -> Result<&Self, BufferError> {
+    pub fn try_from_bytes(bytes: &[u8]) -> Result<&Self, BufferError> {
         if bytes.len() < std::mem::size_of::<PacketHeader>() {
             return Err(BufferError::BufferTooSmall);
         }
@@ -68,7 +67,7 @@ impl PacketHeader {
     /// # Returns
     ///
     /// Returns a shared reference to the raw underlying bytes.
-    pub(crate) fn as_bytes(&self) -> &[u8] {
+    pub fn as_bytes(&self) -> &[u8] {
         bytemuck::bytes_of(self)
     }
 }

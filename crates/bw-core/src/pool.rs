@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! Const-generic static slot pool for performance-critical allocations.
 //!
 //! Provides a lock-free stack of pre-allocated slots with ABA protection.
@@ -12,7 +11,7 @@ use zeroize::Zeroize;
 
 /// Defines whether a slot should be zeroized when released back to the pool.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ZeroizePolicy {
+pub enum ZeroizePolicy {
     /// Never zeroize slot data.
     Never,
     /// Zeroize slot data when dropped.
@@ -24,7 +23,7 @@ pub(crate) enum ZeroizePolicy {
 struct TaggedIndex(u64);
 
 impl TaggedIndex {
-    const GEN_MASK: u64 = 0xFFFF_0000_0000_0000;
+    const _GEN_MASK: u64 = 0xFFFF_0000_0000_0000;
     const IDX_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
 
     fn new(gen: u16, idx: usize) -> Self {
@@ -41,21 +40,21 @@ impl TaggedIndex {
 }
 
 /// A production-grade memory pool with const-generic slot sizing.
-pub(crate) struct StaticSlotPool<const SLOT_SIZE: usize, const POOL_SIZE: usize> {
+pub struct StaticSlotPool<const SLOT_SIZE: usize, const POOL_SIZE: usize> {
     memory: Box<[Mutex<[u8; SLOT_SIZE]>]>,
     nodes: Box<[AtomicUsize]>,
     head: AtomicU64,
     policy: ZeroizePolicy,
 
     /// Total number of successful allocations.
-    pub(crate) successful_checkouts: AtomicUsize,
+    pub successful_checkouts: AtomicUsize,
     /// Total number of failed allocations due to pool exhaustion.
-    pub(crate) pool_exhaustion: AtomicUsize,
+    pub pool_exhaustion: AtomicUsize,
 }
 
 impl<const SLOT_SIZE: usize, const POOL_SIZE: usize> StaticSlotPool<SLOT_SIZE, POOL_SIZE> {
     /// Creates a new statically sized slot pool.
-    pub(crate) fn new(policy: ZeroizePolicy) -> Self {
+    pub fn new(policy: ZeroizePolicy) -> Self {
         let mut memory_vec = Vec::with_capacity(POOL_SIZE);
         let mut nodes_vec = Vec::with_capacity(POOL_SIZE);
 
@@ -76,7 +75,7 @@ impl<const SLOT_SIZE: usize, const POOL_SIZE: usize> StaticSlotPool<SLOT_SIZE, P
     }
 
     /// Checks out a pre-allocated slot from the pool.
-    pub(crate) fn checkout(&self) -> Result<PoolGuard<'_, SLOT_SIZE, POOL_SIZE>, BwError> {
+    pub fn checkout(&self) -> Result<PoolGuard<'_, SLOT_SIZE, POOL_SIZE>, BwError> {
         let mut current_head = TaggedIndex(self.head.load(Ordering::Acquire));
         loop {
             let index = current_head.index();
@@ -137,7 +136,7 @@ impl<const SLOT_SIZE: usize, const POOL_SIZE: usize> StaticSlotPool<SLOT_SIZE, P
 
 /// A RAII guard for a checked-out slot.
 #[must_use]
-pub(crate) struct PoolGuard<'a, const SLOT_SIZE: usize, const POOL_SIZE: usize> {
+pub struct PoolGuard<'a, const SLOT_SIZE: usize, const POOL_SIZE: usize> {
     guard: MutexGuard<'a, [u8; SLOT_SIZE]>,
     pool: &'a StaticSlotPool<SLOT_SIZE, POOL_SIZE>,
     index: usize,
@@ -145,12 +144,12 @@ pub(crate) struct PoolGuard<'a, const SLOT_SIZE: usize, const POOL_SIZE: usize> 
 
 impl<'a, const SLOT_SIZE: usize, const POOL_SIZE: usize> PoolGuard<'a, SLOT_SIZE, POOL_SIZE> {
     /// Returns a mutable reference to the underlying slot data.
-    pub(crate) fn as_mut_slice(&mut self) -> &mut [u8] {
+    pub fn as_mut_slice(&mut self) -> &mut [u8] {
         self.guard.as_mut_slice()
     }
 
     /// Returns a shared reference to the underlying slot data.
-    pub(crate) fn as_slice(&self) -> &[u8] {
+    pub fn as_slice(&self) -> &[u8] {
         self.guard.as_slice()
     }
 }

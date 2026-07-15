@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! Memory allocation utilities and zero-allocation buffers.
 //!
 //! This module provides a lock-free memory pool that pre-allocates
@@ -11,11 +10,11 @@ use zeroize::Zeroize;
 
 /// A highly optimized memory pool that pre-allocates slot buffers
 /// on initialization, strictly guaranteeing zero heap allocations during runtime checkouts.
-pub(crate) struct LockFreeMemoryPool {
+pub struct LockFreeMemoryPool {
     memory: Vec<Mutex<Vec<u8>>>,
     occupancy_flags: Arc<[AtomicBool]>,
     pool_size: usize,
-    slot_capacity: usize, // kept for struct backward compatibility
+    _slot_capacity: usize, // kept for struct backward compatibility
 }
 
 impl LockFreeMemoryPool {
@@ -25,7 +24,7 @@ impl LockFreeMemoryPool {
     ///
     /// * `pool_size` - The number of slots to pre-allocate.
     /// * `slot_capacity` - The size of each slot in bytes.
-    pub(crate) fn new(pool_size: usize, slot_capacity: usize) -> Self {
+    pub fn new(pool_size: usize, slot_capacity: usize) -> Self {
         let mut memory = Vec::with_capacity(pool_size);
         for _ in 0..pool_size {
             memory.push(Mutex::new(vec![0u8; slot_capacity]));
@@ -40,7 +39,7 @@ impl LockFreeMemoryPool {
             memory,
             occupancy_flags: Arc::from(flags),
             pool_size,
-            slot_capacity,
+            _slot_capacity: slot_capacity,
         }
     }
 
@@ -52,7 +51,7 @@ impl LockFreeMemoryPool {
     ///
     /// A `PoolGuard` protecting the checked-out buffer slice, or a `BwError` if the
     /// pool boundaries are violated (i.e. the pool is completely full).
-    pub(crate) fn checkout(&self) -> Result<PoolGuard<'_>, BwError> {
+    pub fn checkout(&self) -> Result<PoolGuard<'_>, BwError> {
         for index in 0..self.pool_size {
             let flag = &self.occupancy_flags[index];
             // Atomically swap occupancy status from false to true
@@ -79,7 +78,7 @@ impl LockFreeMemoryPool {
 /// RAII Guard that manages buffer occupancy with a strictly zero-allocation design.
 ///
 /// When dropped, the guard automatically zeroizes the slice and releases its slot.
-pub(crate) struct PoolGuard<'a> {
+pub struct PoolGuard<'a> {
     guard: MutexGuard<'a, Vec<u8>>,
     pool: &'a LockFreeMemoryPool,
     index: usize,
@@ -87,12 +86,12 @@ pub(crate) struct PoolGuard<'a> {
 
 impl<'a> PoolGuard<'a> {
     /// Returns a shared reference to the claimed buffer slice.
-    pub(crate) fn get(&self) -> &[u8] {
+    pub fn get(&self) -> &[u8] {
         &self.guard
     }
 
     /// Returns a mutable reference to the claimed buffer slice.
-    pub(crate) fn get_mut(&mut self) -> &mut [u8] {
+    pub fn get_mut(&mut self) -> &mut [u8] {
         &mut self.guard
     }
 }
