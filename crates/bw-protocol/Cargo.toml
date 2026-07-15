@@ -1,0 +1,17 @@
+[package]
+name = "bw-protocol"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bw-core = { path = "../bw-core" }
+bw-crypto = { path = "../bw-crypto" }
+serde = { workspace = true, features = ["derive"] }
+thiserror = "1"
+zeroize = { workspace = true }
+bytemuck = { workspace = true }
+
+[[bench]]
+name = "placeholder"
+harness = false
+
