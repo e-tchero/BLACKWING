@@ -1,7 +1,7 @@
 //! Transport abstraction layer.
 
 use crate::error::ProtocolError;
-use crate::frame::ProtocolFrame;
+use crate::frame::{OwnedProtocolFrame, ProtocolFrame};
 use futures::future::BoxFuture;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
@@ -29,8 +29,8 @@ pub trait Transport: Send + Sync {
     /// Sends a protocol frame over the transport.
     fn send<'a>(&'a self, frame: ProtocolFrame<'a>) -> BoxFuture<'a, Result<(), ProtocolError>>;
 
-    /// Receives a protocol frame from the transport.
-    fn receive<'a>(&'a self) -> BoxFuture<'a, Result<ProtocolFrame<'a>, ProtocolError>>;
+    /// Receives an owned protocol frame from the transport.
+    fn receive(&self) -> BoxFuture<'_, Result<OwnedProtocolFrame, ProtocolError>>;
 
     /// Returns the current connection state.
     fn state(&self) -> ConnectionState;
@@ -44,8 +44,6 @@ pub struct MockTransport {
     state: AtomicU32,
     tx: mpsc::Sender<Vec<u8>>,
     rx: Mutex<mpsc::Receiver<Vec<u8>>>,
-    // Holds the last received frame raw buffer.
-    read_buf: Mutex<Vec<u8>>,
 }
 
 impl MockTransport {
@@ -58,14 +56,12 @@ impl MockTransport {
             state: AtomicU32::new(ConnectionState::Connected as u32),
             tx: tx1,
             rx: Mutex::new(rx2),
-            read_buf: Mutex::new(Vec::new()),
         });
 
         let t2 = Arc::new(Self {
             state: AtomicU32::new(ConnectionState::Connected as u32),
             tx: tx2,
             rx: Mutex::new(rx1),
-            read_buf: Mutex::new(Vec::new()),
         });
 
         (t1, t2)
@@ -92,7 +88,7 @@ impl Transport for MockTransport {
         })
     }
 
-    fn receive<'a>(&'a self) -> BoxFuture<'a, Result<ProtocolFrame<'a>, ProtocolError>> {
+    fn receive(&self) -> BoxFuture<'_, Result<OwnedProtocolFrame, ProtocolError>> {
         Box::pin(async move {
             if self.state() != ConnectionState::Connected {
                 return Err(ProtocolError::InvalidRoute);
@@ -100,17 +96,13 @@ impl Transport for MockTransport {
             let mut rx = self.rx.lock().await;
             let bytes = rx.recv().await.ok_or(ProtocolError::BufferTooSmall)?;
 
-            let mut read_buf = self.read_buf.lock().await;
-            *read_buf = bytes;
-
-            // We safely extend the slice lifetime to 'a since read_buf is owned by self,
-            // and self outlives the return future 'a.
-            let ptr = read_buf.as_ptr();
-            let len = read_buf.len();
-            let slice = unsafe { std::slice::from_raw_parts(ptr, len) };
-
-            let decoded = crate::codec::decode_frame(slice)?;
-            Ok(decoded)
+            // Zero-copy parse from the owned bytes read out of the channel,
+            // then copy the slice to make it owned. No unsafe is required.
+            let decoded = crate::codec::decode_frame(&bytes)?;
+            Ok(OwnedProtocolFrame {
+                header: decoded.header,
+                payload: decoded.payload.to_vec(),
+            })
         })
     }
 

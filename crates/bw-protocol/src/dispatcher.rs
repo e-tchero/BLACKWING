@@ -38,7 +38,7 @@ impl MessageDispatcher {
     pub async fn run(&self, transport: Arc<dyn Transport>) -> Result<(), ProtocolError> {
         loop {
             let frame = transport.receive().await?;
-            let envelope = MessageEnvelope::deserialize(frame.payload)?;
+            let envelope = MessageEnvelope::deserialize(&frame.payload)?;
             self.dispatch(envelope)?;
         }
     }
