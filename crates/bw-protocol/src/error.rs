@@ -28,4 +28,12 @@ pub enum ProtocolError {
     /// Handshake validation failed.
     #[error("Invalid protocol handshake")]
     InvalidHandshake,
+
+    /// General protocol serialization failure.
+    #[error("Serialization failed")]
+    SerializationError,
+
+    /// General protocol deserialization failure.
+    #[error("Deserialization failed")]
+    DeserializationError,
 }
