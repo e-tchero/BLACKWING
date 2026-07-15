@@ -57,7 +57,7 @@ async fn test_mock_transport_send_receive() {
 
     let received = t2.receive().await.unwrap();
     assert_eq!(received.header, header);
-    assert_eq!(received.payload, &payload[..]);
+    assert_eq!(received.payload, payload);
 
     t1.close().await.unwrap();
     assert_eq!(t1.state(), ConnectionState::Disconnected);

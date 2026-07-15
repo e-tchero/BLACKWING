@@ -12,3 +12,22 @@ pub struct ProtocolFrame<'a> {
     /// The borrowed payload slice.
     pub payload: &'a [u8],
 }
+
+/// An owned protocol frame containing an owned header and payload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OwnedProtocolFrame {
+    /// The packet header.
+    pub header: PacketHeader,
+    /// The owned payload.
+    pub payload: Vec<u8>,
+}
+
+impl OwnedProtocolFrame {
+    /// Returns a borrowed view of this owned frame.
+    pub fn borrow(&self) -> ProtocolFrame<'_> {
+        ProtocolFrame {
+            header: self.header,
+            payload: &self.payload,
+        }
+    }
+}
