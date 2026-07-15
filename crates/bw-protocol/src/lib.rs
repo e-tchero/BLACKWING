@@ -10,4 +10,5 @@ pub mod error;
 pub mod frame;
 pub mod handshake;
 pub mod header;
+pub mod message;
 pub mod version;
