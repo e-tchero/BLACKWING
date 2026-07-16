@@ -52,4 +52,8 @@ pub enum ProtocolError {
     /// The destination node is invalid for this route.
     #[error("Invalid message destination")]
     InvalidDestination,
+
+    /// Reliable sender window is full.
+    #[error("Reliable sender window is full")]
+    WindowFull,
 }
