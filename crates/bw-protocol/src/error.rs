@@ -56,4 +56,12 @@ pub enum ProtocolError {
     /// Reliable sender window is full.
     #[error("Reliable sender window is full")]
     WindowFull,
+
+    /// Encryption or decryption failed.
+    #[error("Encryption or decryption failed")]
+    EncryptionError,
+
+    /// Replay attack detected.
+    #[error("Replay attack detected")]
+    ReplayDetected,
 }
