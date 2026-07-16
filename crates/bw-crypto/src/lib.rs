@@ -17,7 +17,9 @@ mod random;
 // Public API
 pub mod error;
 pub mod identity;
+pub mod symmetric;
 
 // Re-exports for a clean public surface
 pub use crate::error::{CryptoError, Result};
 pub use crate::identity::{DeviceId, Signature, SigningKey, VerifyKey};
+pub use crate::symmetric::{decrypt_aead, encrypt_aead, hkdf_derive, SymmetricKey};
