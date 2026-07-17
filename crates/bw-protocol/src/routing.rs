@@ -3,10 +3,17 @@
 use crate::error::ProtocolError;
 use crate::message::ProtocolMessage;
 use serde::{Deserialize, Serialize};
+use subtle::ConstantTimeEq;
 
 /// Represents a unique cryptographic participant node identifier.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct NodeId(pub bw_crypto::DeviceId);
+
+impl ConstantTimeEq for NodeId {
+    fn ct_eq(&self, other: &Self) -> subtle::Choice {
+        self.0.as_bytes().ct_eq(other.0.as_bytes())
+    }
+}
 
 impl NodeId {
     /// Returns the special broadcast NodeId containing all zeroes.
@@ -16,13 +23,19 @@ impl NodeId {
 
     /// Checks if this NodeId represents a broadcast destination.
     pub fn is_broadcast(&self) -> bool {
-        self.0.as_bytes() == &[0u8; 32]
+        self.0.as_bytes().ct_eq(&[0u8; 32]).unwrap_u8() == 1
     }
 }
 
 /// Represents a unique connection session identifier.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SessionId(pub [u8; 16]);
+
+impl ConstantTimeEq for SessionId {
+    fn ct_eq(&self, other: &Self) -> subtle::Choice {
+        self.0.ct_eq(&other.0)
+    }
+}
 
 /// Defines the routing path schema for a message envelope.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,12 +82,12 @@ impl MessageEnvelope {
 
         match self.route {
             Route::Loopback => {
-                if self.source != self.destination {
+                if self.source.ct_eq(&self.destination).unwrap_u8() == 0 {
                     return Err(ProtocolError::InvalidRoute);
                 }
             }
             Route::Direct => {
-                if self.source == self.destination {
+                if self.source.ct_eq(&self.destination).unwrap_u8() == 1 {
                     return Err(ProtocolError::InvalidDestination);
                 }
                 if self.destination.is_broadcast() {
@@ -87,10 +100,12 @@ impl MessageEnvelope {
                 }
             }
             Route::Relay { via } => {
-                if self.source == self.destination {
+                if self.source.ct_eq(&self.destination).unwrap_u8() == 1 {
                     return Err(ProtocolError::InvalidDestination);
                 }
-                if via == self.source || via == self.destination {
+                if via.ct_eq(&self.source).unwrap_u8() == 1
+                    || via.ct_eq(&self.destination).unwrap_u8() == 1
+                {
                     return Err(ProtocolError::InvalidRoute);
                 }
                 if self.destination.is_broadcast() {

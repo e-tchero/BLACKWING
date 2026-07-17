@@ -66,8 +66,10 @@ impl EncryptedFrame {
     }
 }
 
+use zeroize::{Zeroize, ZeroizeOnDrop};
+
 /// Active session keys for frame transmission and reception.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Zeroize, ZeroizeOnDrop)]
 pub struct SessionKeys {
     /// Key used for encryption.
     pub send_key: SymmetricKey,
@@ -131,7 +133,7 @@ pub enum KeyRotationPolicy {
 }
 
 /// Encryptor responsible for securing outbound frames.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Zeroize, ZeroizeOnDrop)]
 pub struct FrameEncryptor {
     send_key: SymmetricKey,
     epoch: u32,
@@ -191,10 +193,11 @@ impl FrameEncryptor {
 }
 
 /// Decryptor responsible for verifying and restoring inbound frames.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Zeroize, ZeroizeOnDrop)]
 pub struct FrameDecryptor {
     recv_key: SymmetricKey,
     epoch: u32,
+    #[zeroize(skip)]
     replay_protection: ReplayProtection,
 }
 
@@ -276,13 +279,14 @@ impl FrameDecryptor {
 }
 
 /// Pipeline context coordinating frame encryption, decryption, and key lifetime policies.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Zeroize, ZeroizeOnDrop)]
 pub struct EncryptionContext {
     /// Active encryptor.
     pub encryptor: FrameEncryptor,
     /// Active decryptor.
     pub decryptor: FrameDecryptor,
     /// Active key rotation policy.
+    #[zeroize(skip)]
     pub rotation_policy: KeyRotationPolicy,
 }
 
@@ -290,8 +294,8 @@ impl EncryptionContext {
     /// Creates a new `EncryptionContext` with the specified policy.
     pub fn new(keys: SessionKeys, rotation_policy: KeyRotationPolicy) -> Self {
         Self {
-            encryptor: FrameEncryptor::new(keys.send_key, keys.epoch),
-            decryptor: FrameDecryptor::new(keys.recv_key, keys.epoch),
+            encryptor: FrameEncryptor::new(keys.send_key.clone(), keys.epoch),
+            decryptor: FrameDecryptor::new(keys.recv_key.clone(), keys.epoch),
             rotation_policy,
         }
     }

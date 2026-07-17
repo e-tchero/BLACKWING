@@ -125,3 +125,32 @@ pub fn negotiate_capabilities(
 
     Ok(negotiated)
 }
+
+/// Derives the initial cryptographic session keys from a master secret and nonces exchanged during the handshake.
+///
+/// The HKDF salt is constructed as `client_nonce || server_nonce`, in that order, matching the
+/// temporal sequence of the handshake (client sends first, server responds second). This ordering
+/// is fixed by protocol convention and must not be reversed, as doing so would produce entirely
+/// different key material. Distinct info labels ("client-key", "server-key") ensure domain
+/// separation between the send and receive keys even when the master secret is identical.
+pub fn derive_session_keys(
+    master_secret: &bw_crypto::SymmetricKey,
+    client_nonce: &[u8; 16],
+    server_nonce: &[u8; 16],
+) -> Result<crate::encryption::SessionKeys, ProtocolError> {
+    let mut salt = [0u8; 32];
+    salt[0..16].copy_from_slice(client_nonce);
+    salt[16..32].copy_from_slice(server_nonce);
+
+    let send_key = bw_crypto::hkdf_derive(Some(&salt), &master_secret.0, Some(b"client-key"))
+        .map_err(|_| ProtocolError::EncryptionError)?;
+
+    let recv_key = bw_crypto::hkdf_derive(Some(&salt), &master_secret.0, Some(b"server-key"))
+        .map_err(|_| ProtocolError::EncryptionError)?;
+
+    Ok(crate::encryption::SessionKeys {
+        send_key,
+        recv_key,
+        epoch: 0,
+    })
+}

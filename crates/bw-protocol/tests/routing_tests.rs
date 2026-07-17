@@ -1,4 +1,5 @@
-use bw_crypto::DeviceId;
+use bw_crypto::{DeviceId, SymmetricKey};
+use bw_protocol::encryption::{EncryptionContext, KeyRotationPolicy, SessionKeys};
 use bw_protocol::error::ProtocolError;
 use bw_protocol::message::{MessageType, ProtocolMessage};
 use bw_protocol::routing::{MessageEnvelope, NodeId, Route, SessionId};
@@ -6,6 +7,15 @@ use bw_protocol::session::SessionManager;
 
 fn make_node_id(val: u8) -> NodeId {
     NodeId(DeviceId::from_digest([val; 32]))
+}
+
+fn make_test_context() -> EncryptionContext {
+    let keys = SessionKeys {
+        send_key: SymmetricKey([1u8; 32]),
+        recv_key: SymmetricKey([2u8; 32]),
+        epoch: 0,
+    };
+    EncryptionContext::new(keys, KeyRotationPolicy::Manual)
 }
 
 fn make_mock_message() -> ProtocolMessage {
@@ -44,6 +54,45 @@ fn test_session_manager_flows() {
     // Close session
     assert!(manager.close_session(&id1).unwrap());
     assert!(!manager.validate_session(&id1).unwrap());
+}
+
+#[test]
+fn test_session_encryption_binding() {
+    let manager = SessionManager::new();
+    let id = SessionId([7u8; 16]);
+    let context = make_test_context();
+
+    // Register with context
+    assert!(manager.create_session_with_context(id, context).is_ok());
+
+    // Duplicate is rejected
+    let context2 = make_test_context();
+    let dup = manager.create_session_with_context(id, context2);
+    assert_eq!(dup.err(), Some(ProtocolError::SessionDuplicate));
+
+    // Encryption context is accessible; mutation occurs on the authoritative instance
+    let epoch = manager
+        .with_session_context(&id, |ctx| ctx.current_key_epoch())
+        .expect("Session should have a context");
+    assert_eq!(epoch, 0);
+
+    // Closing the session removes the context
+    assert!(manager.close_session(&id).unwrap());
+    let missing = manager.with_session_context(&id, |ctx| ctx.current_key_epoch());
+    assert_eq!(missing.err(), Some(ProtocolError::SessionNotFound));
+}
+
+#[test]
+fn test_session_without_context_returns_error_on_lookup() {
+    let manager = SessionManager::new();
+    let id = SessionId([8u8; 16]);
+
+    // Register without context
+    assert!(manager.create_session(id).is_ok());
+
+    // Accessing context from a context-less session yields InvalidHandshake
+    let result = manager.with_session_context(&id, |ctx| ctx.current_key_epoch());
+    assert_eq!(result.err(), Some(ProtocolError::InvalidHandshake));
 }
 
 #[test]
