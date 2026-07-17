@@ -1,7 +1,5 @@
 use bw_crypto::SymmetricKey;
-use bw_protocol::encryption::{
-    EncryptionContext, FrameEncryptor, KeyRotationPolicy, SessionKeys,
-};
+use bw_protocol::encryption::{EncryptionContext, FrameEncryptor, KeyRotationPolicy, SessionKeys};
 use bw_protocol::error::ProtocolError;
 use bw_protocol::frame::OwnedProtocolFrame;
 use bw_protocol::header::{PacketHeader, PROTOCOL_MAGIC};
