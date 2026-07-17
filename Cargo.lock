@@ -86,12 +86,12 @@ dependencies = [
 name = "bw-protocol"
 version = "0.1.0"
 dependencies = [
- "bw-core",
  "bw-crypto",
  "bytemuck",
  "ciborium",
  "futures",
  "serde",
+ "subtle",
  "thiserror",
  "tokio",
  "zeroize",

@@ -4,12 +4,12 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-bw-core = { path = "../bw-core" }
 bw-crypto = { path = "../bw-crypto", features = ["serde"] }
 serde = { workspace = true, features = ["derive"] }
 thiserror = "1"
 zeroize = { workspace = true }
 bytemuck = { workspace = true }
+subtle = "2.5"
 ciborium = "0.2"
 tokio = { workspace = true }
 futures = "0.3"

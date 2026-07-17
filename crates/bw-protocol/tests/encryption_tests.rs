@@ -51,8 +51,8 @@ fn test_authentication_tag_verification() {
     let context = EncryptionContext::new(keys, KeyRotationPolicy::Manual);
 
     let original = make_valid_frame(b"Secret message".to_vec());
-    let mut encryptor = context.encryptor;
-    let decryptor = context.decryptor;
+    let mut encryptor = context.encryptor.clone();
+    let decryptor = context.decryptor.clone();
 
     let encrypted = encryptor
         .encrypt_frame(&original)
@@ -125,7 +125,7 @@ fn test_replay_detection() {
 #[test]
 fn test_nonce_uniqueness() {
     let keys = test_keys();
-    let mut encryptor = FrameEncryptor::new(keys.send_key, 0);
+    let mut encryptor = FrameEncryptor::new(keys.send_key.clone(), 0);
 
     let f1 = make_valid_frame(b"msg1".to_vec());
     let f2 = make_valid_frame(b"msg2".to_vec());

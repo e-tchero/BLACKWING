@@ -137,3 +137,19 @@ fn test_malformed_packets() {
     let result: Result<HandshakeRequest, _> = ciborium::de::from_reader(malformed_bytes.as_slice());
     assert!(result.is_err());
 }
+
+#[test]
+fn test_session_key_derivation() {
+    let master = bw_crypto::SymmetricKey([5u8; 32]);
+    let client_nonce = [1u8; 16];
+    let server_nonce = [2u8; 16];
+
+    let keys = bw_protocol::handshake::derive_session_keys(&master, &client_nonce, &server_nonce)
+        .expect("Derivation failed");
+
+    assert_eq!(keys.epoch, 0);
+    // Keys should be derived and distinct
+    assert_ne!(keys.send_key.0, master.0);
+    assert_ne!(keys.recv_key.0, master.0);
+    assert_ne!(keys.send_key.0, keys.recv_key.0);
+}
