@@ -91,6 +91,12 @@ impl SessionManager {
     /// instance inside the session lock. The closure's return value is the only data that
     /// escapes; the context itself is never cloned or moved out.
     ///
+    /// # Deadlocks
+    ///
+    /// The manager's internal lock is held for the duration of the closure. Callers must **not**
+    /// invoke other `SessionManager` methods (e.g. `validate_session`, `close_session`, etc.) from
+    /// within the closure as it will cause a deadlock.
+    ///
     /// # Returns
     ///
     /// `Ok(R)` with the closure's return value on success,
