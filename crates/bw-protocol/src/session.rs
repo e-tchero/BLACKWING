@@ -84,6 +84,31 @@ impl SessionManager {
         Ok(())
     }
 
+    /// Orchestrates session creation from a completed handshake negotiation.
+    ///
+    /// Derives the cryptographic keys from the nonces and master secret, constructs the
+    /// [`EncryptionContext`], and registers the active session. If registration fails (e.g.
+    /// the session ID is already active), all derived cryptographic keys are dropped and
+    /// zeroized immediately.
+    ///
+    /// # Returns
+    ///
+    /// `Ok(())` on success, or a `ProtocolError` if derivation or registration fails.
+    pub fn create_session_from_handshake(
+        &self,
+        id: SessionId,
+        master_secret: &bw_crypto::SymmetricKey,
+        client_nonce: &[u8; 16],
+        server_nonce: &[u8; 16],
+        rotation_policy: crate::encryption::KeyRotationPolicy,
+    ) -> Result<(), ProtocolError> {
+        let keys =
+            crate::handshake::derive_session_keys(master_secret, client_nonce, server_nonce)?;
+        let context = EncryptionContext::new(keys, rotation_policy);
+
+        self.create_session_with_context(id, context)
+    }
+
     /// Executes a closure against the authoritative [`EncryptionContext`] of an active session.
     ///
     /// The closure receives an exclusive mutable reference to the stored context. All mutations
