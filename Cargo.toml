@@ -4,6 +4,7 @@ members = [
     "crates/bw-crypto",
     "crates/bw-core",
     "crates/bw-protocol",
+    "crates/bw-net",
 ]
 
 [workspace.dependencies]

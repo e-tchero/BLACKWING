@@ -14,7 +14,13 @@ ciborium = "0.2"
 tokio = { workspace = true }
 futures = "0.3"
 
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
 [[bench]]
 name = "placeholder"
 harness = false
 
+[[bench]]
+name = "crypto_bench"
+harness = false

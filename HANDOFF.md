@@ -278,63 +278,37 @@ These are locked in. Do not reverse them without a new ADR.
 | `recovery-baseline-v0.1` | Milestone 1: Repository Recovery | `cargo test` passing, toolchain fixed |
 | `architecture-baseline-v0.2` | Milestone 1.5: Hard Freeze | ADRs, maps, vision committed |
 | `wp-3.1-complete` | WP-3.1: bw-core Bootstrap | Empty crate skeleton, all quality gates green |
+| `wp-3.x-complete` | WP-3.2 to WP-3.9 | `bw-core` implementation and stabilization |
+| `wp-4.10-complete` | WP-4.1 to WP-4.10 | `bw-protocol` core logic, crypto integration, gap closure |
+
+### Protocol Freeze v1 Milestone Criteria
+Before `bw-net` can depend on `bw-protocol`, the following criteria must be met:
+- ✅ All protocol tests pass.
+- ✅ Benchmarks compile.
+- ✅ Public APIs frozen.
+- ✅ No security TODOs.
+- ✅ Deferred work explicitly documented.
 
 ### To Do (in strict order)
 
-**WP-3.2 — bw-core Error Types**
-- Migrate `BwError` enum from `archive/recovered_sources/zero_allocation_buffer_pool_type_safe_logging_primitives.rs` into `crates/bw-core/src/error.rs`.
-- Add `serde` as an optional feature (BwError derives Serialize/Deserialize).
-- Add `serde` and `thiserror` to `bw-core/Cargo.toml` (thiserror is already there).
-- Migrate the `test_error_formatting` test into `crates/bw-core/tests/`.
-- Quality gates must pass before proceeding.
+**WP-5.0 — Network Bootstrap (Currently Active)**
+- Bootstrapping the `bw-net` crate (network I/O, sockets, NAT traversal).
+- Benchmarks, verification, ADRs, and related integration.
+- Does *not* include protocol routing.
 
-**WP-3.3 — bw-core Logging Primitives**
-- Migrate `Severity`, `LogEvent`, `HealthReport` from the same recovered source file.
-- Place into `crates/bw-core/src/logging.rs`.
-- `LogEvent::emit_json()` requires `serde_json` as a dev-dependency.
-- Migrate the `test_structured_logging_output` and `test_system_health_evaluation` tests.
+**WP-4.11 — Protocol Routing & Composition**
+- Implement actual callback/handler routing in `dispatcher.rs`.
+- Implement composition pipeline between `reliability.rs` and `encryption.rs`.
+- General protocol cleanup (resolving technical debt).
 
-**WP-3.4 — bw-core Memory Abstractions**
-- Migrate `LockFreeMemoryPool` and `PoolGuard` into `crates/bw-core/src/memory.rs`.
-- This pool uses `Vec<u8>` and `Arc<[AtomicBool]>` — it does allocate during initialization, only zero-allocation in the hot path.
-- Add `zeroize` to `bw-core/Cargo.toml`.
+**WP-6 — Connection Establishment**
+- Handshake over transport, full connection state machines.
 
-**WP-3.5 — bw-core Lock-Free Pool (Advanced)**
-- Migrate `StaticSlotPool` from `archive/recovered_sources/static_slot_pool_refinement.rs` into `crates/bw-core/src/pool.rs`.
-- **WARNING:** This file contains `unsafe` blocks (`UnsafeCell`). The `#![forbid(unsafe_code)]` in `lib.rs` MUST be removed or the pool must be re-implemented safely before migration.
-- Requires ABA-protection design review (TaggedIndex using 64-bit tagged indices).
-- This is the most complex step. Do not rush it.
+**WP-7 — Remote Desktop Pipeline**
+- Display capture, video encoding, input & clipboard.
 
-**WP-3.6 — bw-core Static Slot Refinement**
-- Write integration tests for `StaticSlotPool` covering full checkout/release/exhaustion cycles.
-
-**WP-3.7 — bw-core Integration Tests**
-- All test coverage from recovered sources merged into `crates/bw-core/tests/`.
-
-**WP-3.8 — bw-core Benchmarks**
-- Create `crates/bw-core/benches/pool_throughput.rs`.
-- Benchmark pool checkout/release under contention.
-
-**WP-3.9 — bw-core Documentation & API Review**
-- Audit every `pub` item. Demote to `pub(crate)` anything not needed externally.
-- Complete all doc comments.
-- Tag `bw-core-v0.1`.
-
----
-
-**WP-4.1 — bw-protocol Bootstrap** (after bw-core is stable)
-- Same pattern: empty scaffold first, quality gates, then migrate.
-
-**WP-4.2 — bw-protocol Packet Header**
-- Migrate `PacketHeader`, `ProtocolError` from `archive/recovered_sources/blackwing_protocol_crate.rs`.
-- Requires `bytemuck` dependency (Pod, Zeroable).
-- Note: `unsafe impl Zeroable` and `unsafe impl Pod` are present — bw-protocol should NOT have `#![forbid(unsafe_code)]`.
-
-**WP-4.3 — bw-protocol Capabilities**
-- Migrate `FeatureManifest`, `DisplayProfile`, `CapabilityMessage`.
-- Requires `ciborium` for CBOR serialization.
-
-**WP-4.4 through WP-4.5** — tests and documentation.
+**WP-8 — Client/Server Application**
+- Final console, CLI, agent, and updater applications.
 
 ---
 
