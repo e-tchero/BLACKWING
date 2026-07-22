@@ -145,20 +145,24 @@ These decisions are locked. Do not reverse without creating a new ADR.
 
 ---
 
-## Upcoming Work Packages
+## Work Package Roadmap & Architectural Pivot
+
+Following the completion of WP-4.10, an architectural decision was made to decouple the protocol layer's internal message routing from the networking layer's bootstrap. The roadmap has been updated to reflect this.
+
+### Protocol Freeze v1 Milestone Criteria
+Before `bw-net` can depend on `bw-protocol`, the following must be met:
+- ✅ All protocol tests pass.
+- ✅ Benchmarks compile.
+- ✅ Public APIs frozen.
+- ✅ No security TODOs.
+- ✅ Deferred work explicitly documented.
+
+### Upcoming Work Packages
 
 | Work Package | Objective | Status |
 |---|---|---|
-| WP-3.2 | Migrate `BwError` enum into `bw-core/src/error.rs` | 🔲 Not Started |
-| WP-3.3 | Migrate `Severity`, `LogEvent`, `HealthReport` into `bw-core/src/logging.rs` | 🔲 Not Started |
-| WP-3.4 | Migrate `LockFreeMemoryPool` + `PoolGuard` into `bw-core/src/memory.rs` | 🔲 Not Started |
-| WP-3.5 | Migrate `StaticSlotPool` into `bw-core/src/pool.rs` (unsafe review required) | 🔲 Not Started |
-| WP-3.6 | Integration tests for `StaticSlotPool` | 🔲 Not Started |
-| WP-3.7 | All integration tests from recovered sources into `bw-core/tests/` | 🔲 Not Started |
-| WP-3.8 | Benchmarks in `bw-core/benches/` | 🔲 Not Started |
-| WP-3.9 | Documentation & public API review → tag `bw-core-v0.1` | 🔲 Not Started |
-| WP-4.1 | `bw-protocol` crate bootstrap (empty scaffold) | 🔲 Not Started |
-| WP-4.2 | Migrate `PacketHeader`, `ProtocolError` | 🔲 Not Started |
-| WP-4.3 | Migrate `FeatureManifest`, `DisplayProfile`, `CapabilityMessage` | 🔲 Not Started |
-| WP-4.4 | Protocol tests | 🔲 Not Started |
-| WP-4.5 | Protocol docs & API review → tag `bw-protocol-v0.1` | 🔲 Not Started |
+| WP-5.0 | `bw-net` network bootstrap (sockets, NAT traversal, benchmarks, ADRs) | 🔄 Active |
+| WP-4.11 | `bw-protocol` completion (dispatcher routing, reliability/encryption composition) | 🔲 Not Started |
+| WP-6 | Connection establishment (Handshake over transport) | 🔲 Not Started |
+| WP-7 | Remote desktop pipeline (Capture, encoding, input) | 🔲 Not Started |
+| WP-8 | Client/Server Application (CLI, Updater) | 🔲 Not Started |

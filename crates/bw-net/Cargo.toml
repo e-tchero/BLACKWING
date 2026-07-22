@@ -1,0 +1,15 @@
+[package]
+name = "bw-net"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bw-protocol = { path = "../bw-protocol" }
+thiserror = "1"
+tokio = { workspace = true }
+tokio-util = { version = "0.7", features = ["net"] }
+tracing = "0.1"
+
+[dev-dependencies]
+tokio = { workspace = true }
+bw-crypto = { path = "../bw-crypto" }
