@@ -1,0 +1,31 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/bw-crypto",
+    "crates/bw-core",
+    "crates/bw-protocol",
+    "crates/bw-net",
+]
+
+[workspace.dependencies]
+bytemuck = { version = "1.16", features = ["derive"] }
+serde = { version = "1.0", features = ["derive"] }
+ciborium = "0.2"
+zeroize = { version = "1.8", features = ["zeroize_derive"] }
+tokio = { version = "1.38", features = ["full"] }
+
+# ─────────────────────────────────────────────────────────
+# Workspace-wide lint policy.
+# All crates in this workspace inherit these unless they
+# explicitly override with #[allow(...)] and a justification
+# comment. Overrides must be reviewed before merging.
+# ─────────────────────────────────────────────────────────
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "deny"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+todo = "deny"
+dbg_macro = "deny"
