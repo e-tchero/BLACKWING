@@ -12,7 +12,7 @@
 
 // Internal implementation details
 mod backend;
-mod random;
+pub mod random;
 
 // Public API
 pub mod error;
@@ -22,4 +22,5 @@ pub mod symmetric;
 // Re-exports for a clean public surface
 pub use crate::error::{CryptoError, Result};
 pub use crate::identity::{DeviceId, Signature, SigningKey, VerifyKey};
+pub use crate::random::{secure_random_bytes, OsRandom, SecureRandom};
 pub use crate::symmetric::{decrypt_aead, encrypt_aead, hkdf_derive, SymmetricKey};

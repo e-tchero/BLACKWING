@@ -16,5 +16,6 @@
 
 pub mod connection;
 pub mod error;
+pub mod protocol_adapter;
 pub mod transport;
 pub mod udp;

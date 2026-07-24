@@ -15,3 +15,19 @@ impl SecureRandom for OsRandom {
         getrandom::getrandom(bytes).map_err(|_| CryptoError::EntropyUnavailable)
     }
 }
+
+/// Fills a buffer with cryptographically secure random bytes from the OS entropy source.
+///
+/// This is a convenience wrapper around `OsRandom` that can be called without
+/// instantiating an RNG. Useful for generating nonces, salts, and other
+/// protocol-level random values.
+///
+/// # Errors
+///
+/// Returns [`CryptoError::EntropyUnavailable`] if the OS entropy source is
+/// unavailable (extremely rare outside of early boot or sandboxed environments).
+#[inline]
+pub fn secure_random_bytes(buf: &mut [u8]) -> Result<()> {
+    let mut rng = OsRandom;
+    rng.fill(buf)
+}

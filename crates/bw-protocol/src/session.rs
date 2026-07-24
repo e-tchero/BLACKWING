@@ -1,31 +1,59 @@
-//! Session state management.
+//! Session state management with TTL-based expiry and lifecycle cleanup.
 
 use crate::encryption::EncryptionContext;
 use crate::error::ProtocolError;
 use crate::routing::SessionId;
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
+
+/// Default session time-to-live: 24 hours.
+const DEFAULT_SESSION_TTL: Duration = Duration::from_secs(86_400);
+
+/// Metadata and state tracked for a single active session.
+#[derive(Debug)]
+struct SessionEntry {
+    /// Monotonic timestamp when the session was created.
+    created_at: Instant,
+    /// Maximum lifetime of the session.
+    ttl: Duration,
+    /// Encryption context bound to this session.
+    context: EncryptionContext,
+}
+
+impl SessionEntry {
+    /// Returns `true` if this session has outlived its time-to-live.
+    fn is_expired(&self) -> bool {
+        self.created_at.elapsed() >= self.ttl
+    }
+
+    /// Creates a new session entry with the given context and TTL.
+    fn new(context: EncryptionContext, ttl: Duration) -> Self {
+        Self {
+            created_at: Instant::now(),
+            ttl,
+            context,
+        }
+    }
+}
 
 /// Manages active connection sessions within a node.
 ///
-/// Each session is keyed by [`SessionId`] and optionally bound to an
+/// Each session is keyed by [`SessionId`] and bound to an
 /// [`EncryptionContext`] holding the authoritative mutable cryptographic state
 /// for that session (packet counters, replay windows, epoch, key material).
 ///
-/// # Technical Debt
-///
-/// The `Option<EncryptionContext>` value type exists solely for compatibility
-/// with the legacy [`create_session`](SessionManager::create_session) API, which
-/// registers a session without key material. In the BLACKWING protocol there is
-/// no legitimate operational state where a session lacks an encryption context.
-/// Once all sessions are created through the handshake path (i.e.
-/// [`create_session_with_context`](SessionManager::create_session_with_context)
-/// is the sole registration point), `Option` should be removed and the map
-/// simplified to `HashMap<SessionId, EncryptionContext>`. This is a future
-/// lifecycle cleanup task and is intentionally out of scope for WP-4.10.
+/// Sessions have a configurable time-to-live (TTL). Expired sessions are
+/// detected lazily on every accessor method and eagerly via
+/// [`expire_stale`](SessionManager::expire_stale). An optional background
+/// sweeper task can be started with
+/// [`start_sweeper`](SessionManager::start_sweeper) to reclaim expired
+/// sessions at a regular interval.
 #[derive(Debug)]
 pub struct SessionManager {
-    active_sessions: Mutex<HashMap<SessionId, Option<EncryptionContext>>>,
+    active_sessions: Mutex<HashMap<SessionId, SessionEntry>>,
+    default_ttl: Duration,
 }
 
 impl Default for SessionManager {
@@ -35,38 +63,68 @@ impl Default for SessionManager {
 }
 
 impl SessionManager {
-    /// Creates a new `SessionManager`.
+    /// Creates a new `SessionManager` with the default session TTL (24 hours).
     pub fn new() -> Self {
         Self {
             active_sessions: Mutex::new(HashMap::new()),
+            default_ttl: DEFAULT_SESSION_TTL,
         }
     }
 
-    /// Registers a new session without an associated encryption context.
+    /// Creates a new `SessionManager` with a custom default session TTL.
+    pub fn with_ttl(ttl: Duration) -> Self {
+        Self {
+            active_sessions: Mutex::new(HashMap::new()),
+            default_ttl: ttl,
+        }
+    }
+
+    /// Removes all expired sessions from the map and returns the count
+    /// of removed entries.
     ///
-    /// # Returns
+    /// # Errors
     ///
-    /// `Ok(())` if registered successfully, or `ProtocolError::SessionDuplicate` if the session ID is already active.
-    pub fn create_session(&self, id: SessionId) -> Result<(), ProtocolError> {
+    /// Returns [`ProtocolError::InvalidHandshake`] if the internal lock is
+    /// poisoned (unrecoverable).
+    pub fn expire_stale(&self) -> Result<usize, ProtocolError> {
         let mut sessions = self
             .active_sessions
             .lock()
             .map_err(|_| ProtocolError::InvalidHandshake)?;
 
-        if sessions.contains_key(&id) {
-            return Err(ProtocolError::SessionDuplicate);
-        }
-
-        sessions.insert(id, None);
-        Ok(())
+        let before = sessions.len();
+        sessions.retain(|_, entry| !entry.is_expired());
+        Ok(before - sessions.len())
     }
 
-    /// Registers a new session with an associated [`EncryptionContext`].
+    /// Starts a background Tokio task that calls [`expire_stale`](SessionManager::expire_stale)
+    /// at the given `interval`.
+    ///
+    /// The returned [`tokio::task::JoinHandle`] can be aborted to stop the
+    /// sweeper. The sweeper runs until aborted or until the Tokio runtime is
+    /// shut down.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called outside a Tokio runtime context.
+    pub fn start_sweeper(self: &Arc<Self>, interval: Duration) -> tokio::task::JoinHandle<()> {
+        let manager = Arc::clone(self);
+        tokio::spawn(async move {
+            let mut timer = tokio::time::interval(interval);
+            timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                timer.tick().await;
+                let _ = manager.expire_stale();
+            }
+        })
+    }
+
+    /// Registers a new session bound to the given [`EncryptionContext`].
     ///
     /// # Returns
     ///
     /// `Ok(())` if registered successfully, or `ProtocolError::SessionDuplicate` if the session ID is already active.
-    pub fn create_session_with_context(
+    pub fn create_session(
         &self,
         id: SessionId,
         context: EncryptionContext,
@@ -80,7 +138,7 @@ impl SessionManager {
             return Err(ProtocolError::SessionDuplicate);
         }
 
-        sessions.insert(id, Some(context));
+        sessions.insert(id, SessionEntry::new(context, self.default_ttl));
         Ok(())
     }
 
@@ -106,10 +164,11 @@ impl SessionManager {
             crate::handshake::derive_session_keys(master_secret, client_nonce, server_nonce)?;
         let context = EncryptionContext::new(keys, rotation_policy);
 
-        self.create_session_with_context(id, context)
+        self.create_session(id, context)
     }
 
-    /// Executes a closure against the authoritative [`EncryptionContext`] of an active session.
+    /// Removes expired entries, then executes a closure against the authoritative
+    /// [`EncryptionContext`] of an active session.
     ///
     /// The closure receives an exclusive mutable reference to the stored context. All mutations
     /// (counter advances, replay window updates, epoch changes) occur on the authoritative
@@ -125,7 +184,7 @@ impl SessionManager {
     /// # Returns
     ///
     /// `Ok(R)` with the closure's return value on success,
-    /// `ProtocolError::SessionNotFound` if the session does not exist, or
+    /// `ProtocolError::SessionNotFound` if the session does not exist or has expired, or
     /// `ProtocolError::InvalidHandshake` if the session exists but has no associated context.
     pub fn with_session_context<F, R>(&self, id: &SessionId, f: F) -> Result<R, ProtocolError>
     where
@@ -136,10 +195,11 @@ impl SessionManager {
             .lock()
             .map_err(|_| ProtocolError::InvalidHandshake)?;
 
+        self.remove_expired_locked(&mut sessions);
+
         match sessions.get_mut(id) {
             None => Err(ProtocolError::SessionNotFound),
-            Some(None) => Err(ProtocolError::InvalidHandshake),
-            Some(Some(ctx)) => Ok(f(ctx)),
+            Some(entry) => Ok(f(&mut entry.context)),
         }
     }
 
@@ -154,15 +214,19 @@ impl SessionManager {
             .lock()
             .map_err(|_| ProtocolError::InvalidHandshake)?;
 
+        self.remove_expired_locked(&mut sessions);
+
         Ok(sessions.remove(id).is_some())
     }
 
-    /// Validates if a session is currently active.
+    /// Validates if a session is currently active and not expired.
     pub fn validate_session(&self, id: &SessionId) -> Result<bool, ProtocolError> {
-        let sessions = self
+        let mut sessions = self
             .active_sessions
             .lock()
             .map_err(|_| ProtocolError::InvalidHandshake)?;
+
+        self.remove_expired_locked(&mut sessions);
 
         Ok(sessions.contains_key(id))
     }
@@ -171,12 +235,20 @@ impl SessionManager {
     ///
     /// # Returns
     ///
-    /// The session ID if active, or `ProtocolError::SessionNotFound` if the session is missing.
+    /// The session ID if active and not expired, or `ProtocolError::SessionNotFound` if the session is missing.
     pub fn lookup_session(&self, id: &SessionId) -> Result<SessionId, ProtocolError> {
         if self.validate_session(id)? {
             Ok(*id)
         } else {
             Err(ProtocolError::SessionNotFound)
         }
+    }
+
+    /// Removes all expired entries from an already-locked sessions map.
+    ///
+    /// Called at the start of every accessor method so that expired sessions
+    /// are rejected lazily without requiring the sweeper to run.
+    fn remove_expired_locked(&self, sessions: &mut HashMap<SessionId, SessionEntry>) {
+        sessions.retain(|_, entry| !entry.is_expired());
     }
 }

@@ -4,7 +4,7 @@ use crate::error::ProtocolError;
 use serde::{Deserialize, Serialize};
 
 /// The type classification of a protocol message.
-#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum MessageType {
     /// Keep-alive ping query.

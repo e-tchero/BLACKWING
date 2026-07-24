@@ -33,11 +33,11 @@ fn test_session_manager_flows() {
     let id1 = SessionId([1u8; 16]);
     let id2 = SessionId([2u8; 16]);
 
-    // Create session
-    assert!(manager.create_session(id1).is_ok());
+    // Create session with context
+    assert!(manager.create_session(id1, make_test_context()).is_ok());
 
     // Duplicate rejection
-    let result = manager.create_session(id1);
+    let result = manager.create_session(id1, make_test_context());
     assert_eq!(result.err(), Some(ProtocolError::SessionDuplicate));
 
     // Validate active session
@@ -63,11 +63,11 @@ fn test_session_encryption_binding() {
     let context = make_test_context();
 
     // Register with context
-    assert!(manager.create_session_with_context(id, context).is_ok());
+    assert!(manager.create_session(id, context).is_ok());
 
     // Duplicate is rejected
     let context2 = make_test_context();
-    let dup = manager.create_session_with_context(id, context2);
+    let dup = manager.create_session(id, context2);
     assert_eq!(dup.err(), Some(ProtocolError::SessionDuplicate));
 
     // Encryption context is accessible; mutation occurs on the authoritative instance
@@ -80,19 +80,6 @@ fn test_session_encryption_binding() {
     assert!(manager.close_session(&id).unwrap());
     let missing = manager.with_session_context(&id, |ctx| ctx.current_key_epoch());
     assert_eq!(missing.err(), Some(ProtocolError::SessionNotFound));
-}
-
-#[test]
-fn test_session_without_context_returns_error_on_lookup() {
-    let manager = SessionManager::new();
-    let id = SessionId([8u8; 16]);
-
-    // Register without context
-    assert!(manager.create_session(id).is_ok());
-
-    // Accessing context from a context-less session yields InvalidHandshake
-    let result = manager.with_session_context(&id, |ctx| ctx.current_key_epoch());
-    assert_eq!(result.err(), Some(ProtocolError::InvalidHandshake));
 }
 
 #[test]
