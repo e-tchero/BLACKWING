@@ -4,7 +4,7 @@ members = [
     "crates/bw-crypto",
     "crates/bw-core",
     "crates/bw-protocol",
-    "crates/bw-net",
+    "crates/bw-net", "crates/bw-transport", "crates/bw-session",
 ]
 
 [workspace.dependencies]
