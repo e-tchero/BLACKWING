@@ -12,25 +12,6 @@
 use bw_net::connection::ConnectionManager;
 use bw_protocol::dispatcher::MessageDispatcher;
 use std::sync::Arc;
-use tokio::net::UdpSocket;
-use tokio::time::{sleep, Duration};
-
-async fn setup_manager() -> (Arc<ConnectionManager>, tokio::task::JoinHandle<()>) {
-    let dispatcher = Arc::new(MessageDispatcher::new());
-    let manager = Arc::new(ConnectionManager::new(dispatcher));
-
-    // In a real scenario we'd bind and keep the server running.
-    // For these edge case tests, we just want to ensure the loop
-    // doesn't crash when it receives bad data.
-    let m = Arc::clone(&manager);
-    let handle = tokio::spawn(async move {
-        // Keep the manager alive
-        sleep(Duration::from_secs(5)).await;
-        let _ = m;
-    });
-
-    (manager, handle)
-}
 
 #[tokio::test]
 async fn phase4_resilience_malformed_and_truncated() {
@@ -46,8 +27,8 @@ async fn phase4_resilience_malformed_and_truncated() {
         .await
         .unwrap();
 
-    let server_port = server_handle.peer_addr().port(); // Wait, this is the peer. We want the local port.
-                                                        // We didn't expose local_addr on ConnectionHandle.
+    let _server_port = server_handle.peer_addr().port(); // Wait, this is the peer. We want the local port.
+                                                         // We didn't expose local_addr on ConnectionHandle.
 }
 
 #[tokio::test]
