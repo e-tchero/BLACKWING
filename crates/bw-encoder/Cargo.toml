@@ -1,0 +1,17 @@
+[package]
+name = "bw-encoder"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bw-capture = { version = "0.1.0", path = "../bw-capture" }
+openh264 = "0.9.7"
+thiserror = "2.0.19"
+tokio = { workspace = true, features = ["rt", "sync"] }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+bw-transport = { path = "../bw-transport" }
+tracing-subscriber = "0.3.23"

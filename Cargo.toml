@@ -1,16 +1,19 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/bw-crypto",
     "crates/bw-core",
+    "crates/bw-crypto",
+    "crates/bw-net",
     "crates/bw-protocol",
-    "crates/bw-net", "crates/bw-transport", "crates/bw-session", "crates/bw-capture",
+    "crates/bw-session",
+    "crates/bw-transport",
+    "crates/bw-capture",
+    "crates/bw-encoder",
 ]
 
 [workspace.dependencies]
 bytemuck = { version = "1.16", features = ["derive"] }
 serde = { version = "1.0", features = ["derive"] }
-ciborium = "0.2"
 zeroize = { version = "1.8", features = ["zeroize_derive"] }
 tokio = { version = "1.38", features = ["full"] }
 
