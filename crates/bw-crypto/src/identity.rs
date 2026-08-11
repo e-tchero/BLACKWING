@@ -258,6 +258,19 @@ impl Drop for SigningKey {
 }
 
 impl SigningKey {
+    /// Generates a fresh Ed25519 signing key using OS entropy.
+    pub fn generate_ed25519() -> crate::error::Result<Self> {
+        use crate::random::SecureRandom;
+        let mut secret = [0u8; 32];
+        let mut rng = crate::random::OsRandom;
+        rng.fill(&mut secret)?;
+        Ok(Self {
+            inner: crate::backend::SigningKeyInner::Dalek(
+                crate::backend::dalek::DalekSigningKey::from_secret(secret),
+            ),
+        })
+    }
+
     /// Extracts the associated public verification key.
     /// This path executes purely via static enum-matching dispatch.
     pub fn verify_key(&self) -> VerifyKey {
@@ -287,6 +300,14 @@ pub struct VerifyKey {
 }
 
 impl VerifyKey {
+    /// Deserializes a VerifyKey from a 32-byte array (assuming Dalek/Ed25519 backend).
+    pub fn from_bytes(bytes: [u8; 32]) -> Result<Self> {
+        let dalek_key = crate::backend::dalek::DalekVerifyKey::from_bytes(&bytes)?;
+        Ok(Self {
+            inner: VerifyKeyInner::Dalek(dalek_key),
+        })
+    }
+
     /// Deterministically derives the versioned canonical DeviceId from this verify key.
     pub fn device_id(&self) -> DeviceId {
         DeviceId::derive(self)

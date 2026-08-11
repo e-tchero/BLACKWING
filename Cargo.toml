@@ -9,6 +9,7 @@ members = [
     "crates/bw-transport",
     "crates/bw-capture",
     "crates/bw-encoder",
+    "crates/bw-relay",
 ]
 
 [workspace.dependencies]

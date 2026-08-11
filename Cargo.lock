@@ -165,6 +165,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "bw-relay"
+version = "0.1.0"
+dependencies = [
+ "bw-core",
+ "bw-crypto",
+ "serde",
+ "sha2",
+ "thiserror 1.0.69",
+ "tokio",
+]
+
+[[package]]
 name = "bw-session"
 version = "0.1.0"
 dependencies = [

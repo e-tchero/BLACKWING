@@ -52,8 +52,6 @@ impl EncoderPipeline {
             })
             .unwrap_or_else(|e| panic!("Failed to spawn encoder thread: {}", e));
 
-        Self {
-            _handle: handle,
-        }
+        Self { _handle: handle }
     }
 }
