@@ -170,6 +170,7 @@ version = "0.1.0"
 dependencies = [
  "bw-core",
  "bw-crypto",
+ "getrandom 0.2.17",
  "serde",
  "sha2",
  "thiserror 1.0.69",

@@ -16,7 +16,10 @@ pub enum IntentState {
         created_at: u64,
     },
     /// Target accepted; both parties' candidates are available for exchange.
-    Accepted,
+    Accepted {
+        /// The 32-byte routing token generated upon acceptance.
+        relay_token: [u8; 32],
+    },
     /// The intent expired before the target accepted.
     Expired,
 }
@@ -106,7 +109,7 @@ impl RendezvousRegistry {
         intent_id: [u8; 16],
         acceptor: DeviceId,
         target_candidates: Vec<Candidate>,
-    ) -> Result<(DeviceId, Vec<Candidate>), &'static str> {
+    ) -> Result<(DeviceId, Vec<Candidate>, [u8; 32]), &'static str> {
         let now = self.clock.now_ms();
 
         let mut intents = self
@@ -123,7 +126,7 @@ impl RendezvousRegistry {
                     return Err("Intent has expired");
                 }
             }
-            IntentState::Accepted => return Err("Intent is already accepted"),
+            IntentState::Accepted { .. } => return Err("Intent is already accepted"),
             IntentState::Expired => return Err("Intent has expired"),
         }
 
@@ -134,9 +137,13 @@ impl RendezvousRegistry {
         let initiator = intent.initiator;
         let initiator_candidates = intent.initiator_candidates.clone();
         intent.target_candidates = target_candidates;
-        intent.state = IntentState::Accepted;
+        
+        let mut relay_token = [0u8; 32];
+        getrandom::getrandom(&mut relay_token).map_err(|_| "Failed to generate random token")?;
+        
+        intent.state = IntentState::Accepted { relay_token };
 
-        Ok((initiator, initiator_candidates))
+        Ok((initiator, initiator_candidates, relay_token))
     }
 
     /// Returns the target's candidates for the initiator.
@@ -147,7 +154,7 @@ impl RendezvousRegistry {
         &self,
         intent_id: [u8; 16],
         requester: DeviceId,
-    ) -> Result<Vec<Candidate>, &'static str> {
+    ) -> Result<(Vec<Candidate>, [u8; 32]), &'static str> {
         let intents = self
             .intents
             .read()
@@ -155,17 +162,17 @@ impl RendezvousRegistry {
 
         let intent = intents.get(&intent_id).ok_or("Intent not found")?;
 
-        match intent.state {
-            IntentState::Accepted => {}
+        let token = match intent.state {
+            IntentState::Accepted { relay_token } => relay_token,
             IntentState::Pending { .. } => return Err("Intent not yet accepted by the target"),
             IntentState::Expired => return Err("Intent has expired"),
-        }
+        };
 
         if intent.initiator != requester {
             return Err("Unauthorized: requester is not the initiator of this intent");
         }
 
-        Ok(intent.target_candidates.clone())
+        Ok((intent.target_candidates.clone(), token))
     }
 
     /// Marks all intents that have exceeded `INTENT_TIMEOUT_MS` as expired.

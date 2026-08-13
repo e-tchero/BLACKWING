@@ -1,4 +1,5 @@
 use crate::clock::{Clock, SystemClock};
+use crate::forwarding::ForwardingTable;
 use crate::protocol::RelayMessage;
 use crate::rendezvous::RendezvousRegistry;
 use bw_crypto::{DeviceId, Signature, VerifyKey};
@@ -49,6 +50,8 @@ pub struct ClientContext {
 pub struct RelayServer {
     registry: RwLock<HashMap<DeviceId, ClientContext>>,
     rendezvous: Arc<RendezvousRegistry>,
+    /// The forwarding table routing data-plane packets based on authenticated relay tokens.
+    pub forwarding: Arc<ForwardingTable>,
     next_session_id: std::sync::atomic::AtomicU64,
     clock: Arc<dyn Clock>,
 }
@@ -64,6 +67,7 @@ impl RelayServer {
         Arc::new(Self {
             registry: RwLock::new(HashMap::new()),
             rendezvous: RendezvousRegistry::with_clock(clock.clone()),
+            forwarding: Arc::new(ForwardingTable::new(clock.clone())),
             next_session_id: std::sync::atomic::AtomicU64::new(1),
             clock,
         })
@@ -144,6 +148,20 @@ impl RelayServer {
                 requester_device_id,
                 intent_id,
             } => self.handle_get_candidates(requester_device_id, intent_id),
+
+            // ── Phase 3: Relay Establish ──────────────────────────────────────
+            RelayMessage::RelayEstablishRequest {
+                intent_id,
+                device_id,
+                timestamp,
+                signature_bytes,
+            } => self.handle_relay_establish(
+                intent_id,
+                device_id,
+                timestamp,
+                signature_bytes,
+                peer_addr,
+            ),
 
             _ => Err(RelayError::Internal(
                 "Message type not valid for server-side processing".into(),
@@ -348,16 +366,25 @@ impl RelayServer {
             .verify(&payload, &Signature::from_bytes(sig_arr))
             .map_err(|_| RelayError::AuthFailed("AcceptConnect signature verification failed"))?;
 
-        // Accept the intent and retrieve the initiator's candidates
-        let (_initiator, initiator_candidates) = self
+        // Accept the intent and retrieve the initiator's candidates and relay token
+        let (initiator, initiator_candidates, relay_token) = self
             .rendezvous
             .accept_intent(id_arr, acceptor_device_id, candidates)
             .map_err(|e| RelayError::Internal(e.into()))?;
 
-        // Return the initiator's candidates to the acceptor
+        // Authorize the forwarding pair in the ForwardingTable
+        self.forwarding.authorize_pair(
+            id_arr,
+            relay_token,
+            initiator,
+            acceptor_device_id,
+        );
+
+        // Return the initiator's candidates and relay token to the acceptor
         Ok(RelayMessage::CandidateExchange {
             intent_id,
             candidates: initiator_candidates,
+            relay_token,
         })
     }
 
@@ -377,7 +404,7 @@ impl RelayServer {
             return Err(RelayError::AuthFailed("Requester is not registered"));
         }
 
-        let candidates = self
+        let (candidates, relay_token) = self
             .rendezvous
             .get_target_candidates(id_arr, requester_device_id)
             .map_err(|e| RelayError::Internal(e.into()))?;
@@ -385,6 +412,7 @@ impl RelayServer {
         Ok(RelayMessage::CandidateExchange {
             intent_id,
             candidates,
+            relay_token,
         })
     }
 
@@ -409,5 +437,58 @@ impl RelayServer {
         self.rendezvous
             .peek_initiator(intent_id)
             .map_err(|e| RelayError::Internal(e.into()))
+    }
+
+    fn handle_relay_establish(
+        &self,
+        intent_id: Vec<u8>,
+        device_id: DeviceId,
+        timestamp: u64,
+        signature_bytes: Vec<u8>,
+        peer_addr: Option<SocketAddr>,
+    ) -> Result<RelayMessage, RelayError> {
+        let now = self.clock.now_ms();
+
+        if now.abs_diff(timestamp) > TIMESTAMP_WINDOW_MS {
+            return Err(RelayError::AuthFailed("RelayEstablishRequest timestamp out of bounds"));
+        }
+
+        if intent_id.len() != 16 {
+            return Err(RelayError::AuthFailed("intent_id must be exactly 16 bytes"));
+        }
+        let mut id_arr = [0u8; 16];
+        id_arr.copy_from_slice(&intent_id);
+
+        if signature_bytes.len() != 64 {
+            return Err(RelayError::AuthFailed("Signature must be exactly 64 bytes"));
+        }
+
+        // Device must be registered
+        let verify_key = self.verify_key_for(&device_id)?;
+
+        // Verify: SHA-256(intent_id || device_id || timestamp)
+        let mut hasher = Sha256::new();
+        hasher.update(&intent_id);
+        hasher.update(device_id.as_bytes());
+        hasher.update(timestamp.to_be_bytes());
+        let payload: [u8; 32] = hasher.finalize().into();
+
+        let sig_arr: [u8; 64] = signature_bytes
+            .try_into()
+            .map_err(|_| RelayError::AuthFailed("Signature conversion failed"))?;
+        verify_key
+            .verify(&payload, &Signature::from_bytes(sig_arr))
+            .map_err(|_| RelayError::AuthFailed("RelayEstablishRequest signature verification failed"))?;
+
+        // Bind the authenticated network address
+        let addr = peer_addr.ok_or(RelayError::AuthFailed(
+            "RelayEstablishRequest requires a known peer address",
+        ))?;
+
+        self.forwarding
+            .update_binding(id_arr, device_id, addr)
+            .map_err(|e| RelayError::Internal(e.into()))?;
+
+        Ok(RelayMessage::RelayEstablishAck { intent_id })
     }
 }
