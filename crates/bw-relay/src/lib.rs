@@ -19,6 +19,8 @@ pub mod candidate;
 pub mod checker;
 /// Time abstraction for deterministic testing.
 pub mod clock;
+/// Blind-forwarding table and state machine for Phase 3 relay data plane.
+pub mod forwarding;
 /// Signaling protocol for registration, discovery, and rendezvous.
 pub mod protocol;
 /// Rendezvous state machine managing connect-intent lifecycle.

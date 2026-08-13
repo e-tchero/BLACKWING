@@ -1,4 +1,4 @@
-//! Tests for bw-relay registration and rendezvous.
+﻿//! Tests for bw-relay registration and rendezvous.
 
 use bw_crypto::{DeviceId, SigningKey};
 use bw_relay::candidate::Candidate;
@@ -57,7 +57,7 @@ fn register_device(server: &RelayServer, key: &SigningKey) -> (DeviceId, u64) {
     }
 }
 
-// ── Phase 1 Tests ────────────────────────────────────────────────────────
+// â”€â”€ Phase 1 Tests â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 #[test]
 fn test_registration_and_discovery_success() {
@@ -167,7 +167,7 @@ fn test_registration_invalid_signature() {
     assert!(server.handle_message(req).is_err());
 }
 
-// ── Phase 2 Tests (Rendezvous & Connection checks) ───────────────────────
+// â”€â”€ Phase 2 Tests (Rendezvous & Connection checks) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 #[test]
 fn test_rendezvous_happy_path() {
@@ -239,7 +239,7 @@ fn test_rendezvous_happy_path() {
     match accept_resp {
         RelayMessage::CandidateExchange {
             intent_id: id,
-            candidates,
+            candidates, relay_token: _,
         } => {
             assert_eq!(id, intent_id);
             assert_eq!(candidates.len(), 1);
@@ -261,7 +261,7 @@ fn test_rendezvous_happy_path() {
     match get_cand_resp {
         RelayMessage::CandidateExchange {
             intent_id: id,
-            candidates,
+            candidates, relay_token: _,
         } => {
             assert_eq!(id, intent_id);
             assert_eq!(candidates.len(), 1);
@@ -500,7 +500,7 @@ fn test_rendezvous_intent_timeout() {
     assert!(res2.is_ok());
 }
 
-// ── Client-side Checker Tests ─────────────────────────────────────────────
+// â”€â”€ Client-side Checker Tests â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 struct MockConnector {
     reachable: SocketAddr,
