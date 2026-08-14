@@ -15,11 +15,13 @@ use std::sync::Arc;
 use std::sync::mpsc;
 
 use bw_decoder::DecodedImage;
+use bw_protocol::message::ProtocolMessage;
 use pixels::{Pixels, PixelsBuilder, SurfaceTexture};
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
-use winit::event::WindowEvent;
+use winit::event::{DeviceEvent, DeviceId, ElementState, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
+use winit::keyboard::PhysicalKey;
 use winit::window::{Window, WindowAttributes, WindowId};
 
 /// Initial window width in physical pixels.
@@ -41,17 +43,34 @@ struct App {
     frame_rx: mpsc::Receiver<DecodedImage>,
     /// The most recent decoded frame, ready to be blitted.
     last_image: Option<DecodedImage>,
+    /// Channel carrying captured input messages to the (simulated) QUIC sender.
+    input_tx: tokio::sync::mpsc::Sender<ProtocolMessage>,
+    /// Held receiver keeps the input channel alive until the network sender
+    /// is wired up.
+    _input_rx: tokio::sync::mpsc::Receiver<ProtocolMessage>,
+    /// Current mouse button state: bit 0 = left, bit 1 = right, bit 2 = middle.
+    buttons_mask: u8,
 }
 
 impl App {
     /// Creates the application state with a frame receiver.
     fn new(frame_rx: mpsc::Receiver<DecodedImage>) -> Self {
+        let (input_tx, _input_rx) = tokio::sync::mpsc::channel::<ProtocolMessage>(256);
         Self {
             window: None,
             pixels: None,
             frame_rx,
             last_image: None,
+            input_tx,
+            _input_rx,
+            buttons_mask: 0,
         }
+    }
+
+    /// Sends a captured input message to the (simulated) network sender,
+    /// dropping it if the channel is full (backpressure).
+    fn send_input(&self, message: ProtocolMessage) {
+        let _ = self.input_tx.try_send(message);
     }
 
     /// Blits the latest decoded frame into the pixel buffer and presents it.
@@ -122,7 +141,50 @@ impl ApplicationHandler for App {
                     window.request_redraw();
                 }
             }
+            WindowEvent::MouseInput { state, button, .. } => {
+                // Update the button-state mask and report it to the server.
+                if let Some(bit) = button_bit(button) {
+                    if state == ElementState::Pressed {
+                        self.buttons_mask |= bit;
+                    } else {
+                        self.buttons_mask &= !bit;
+                    }
+                }
+                let message =
+                    ProtocolMessage::mouse_event(0, 0, self.buttons_mask).expect("mouse event");
+                self.send_input(message);
+            }
+            WindowEvent::KeyboardInput { event, .. } => {
+                // Key repeats are redundant for a remote-control stream.
+                if event.repeat {
+                    return;
+                }
+                if let PhysicalKey::Code(code) = event.physical_key {
+                    // winit 0.30 `KeyCode` is a fieldless enum; its discriminant is a stable
+                    // per-key identifier (HID usage order). A full HID -> VK translation table
+                    // is future work for the real input path.
+                    let keycode = code as u32 as u16;
+                    let is_down = event.state == ElementState::Pressed;
+                    let message =
+                        ProtocolMessage::keyboard_event(keycode, is_down).expect("keyboard event");
+                    self.send_input(message);
+                }
+            }
             _ => {}
+        }
+    }
+
+    fn device_event(
+        &mut self,
+        _event_loop: &ActiveEventLoop,
+        _device_id: DeviceId,
+        event: DeviceEvent,
+    ) {
+        if let DeviceEvent::MouseMotion { delta } = event {
+            let message =
+                ProtocolMessage::mouse_event(delta.0 as i32, delta.1 as i32, self.buttons_mask)
+                    .expect("mouse event");
+            self.send_input(message);
         }
     }
 }
@@ -133,6 +195,20 @@ fn blit_rgb_to_frame(frame: &mut [u8], image: &DecodedImage) {
     for (dst, src_px) in frame.chunks_exact_mut(4).zip(image.rgb.chunks_exact(3)) {
         dst[..3].copy_from_slice(src_px);
         dst[3] = 0xFF;
+    }
+}
+
+/// Maps a winit mouse button to its bit in the protocol button-state mask.
+///
+/// Matches the TASK-103 bit convention: bit 0 = left, bit 1 = right,
+/// bit 2 = middle.
+fn button_bit(button: MouseButton) -> Option<u8> {
+    match button {
+        MouseButton::Left => Some(0b001),
+        MouseButton::Right => Some(0b010),
+        MouseButton::Middle => Some(0b100),
+        // winit's MouseButton is #[non_exhaustive] (Back/Forward/Other exist).
+        _ => None,
     }
 }
 
