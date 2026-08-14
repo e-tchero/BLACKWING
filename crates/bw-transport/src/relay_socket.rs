@@ -15,9 +15,10 @@
 //!
 //! # MTU
 //!
-//! The maximum QUIC payload is limited to 1168 bytes (1200 - 32) to avoid
-//! IP fragmentation across the relay hop.  The relay drops any packet whose
-//! total size (header + payload) exceeds 1200 bytes.
+//! The maximum QUIC payload is 1200 bytes — RFC 9000 mandates that endpoints
+//! pad Initial datagrams to at least this size, so the relay must carry a full
+//! QUIC datagram.  With the 32-byte relay header the total wire size is 1232
+//! bytes, which remains below the typical UDP MTU.
 
 use quinn::udp::{RecvMeta, Transmit};
 use quinn::{AsyncUdpSocket, UdpPoller};
@@ -31,10 +32,12 @@ use std::{
 };
 use tokio::net::UdpSocket;
 
-/// Maximum allowed QUIC payload size when relaying (1200 - 32-byte header).
-pub const MAX_RELAY_PAYLOAD: usize = 1168;
-/// Total maximum wire size: relay header + QUIC payload.
-pub const MAX_RELAY_PACKET: usize = 1200;
+/// Maximum allowed QUIC payload size when relaying.  RFC 9000 requires
+/// endpoints to pad Initial datagrams to at least 1200 bytes, so the relay
+/// must accept a full 1200-byte QUIC datagram.
+pub const MAX_RELAY_PAYLOAD: usize = 1200;
+/// Total maximum wire size: relay header + QUIC payload (1200 + 32).
+pub const MAX_RELAY_PACKET: usize = 1232;
 /// Size of the relay routing header.
 pub const RELAY_HEADER_LEN: usize = 32;
 

@@ -197,6 +197,7 @@ dependencies = [
  "bw-core",
  "bw-crypto",
  "bw-protocol",
+ "bw-relay",
  "quinn",
  "rcgen",
  "rustls",
