@@ -1,7 +1,7 @@
 use crate::clock::Clock;
 use bw_crypto::DeviceId;
 use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, RwLock};
 
 /// Maximum forwarding payload size in bytes. Packets exceeding this are dropped.
@@ -13,6 +13,24 @@ pub const MAX_PACKET_SIZE: usize = 1200;
 
 /// Idle timeout after which an active forwarding context is expired (30 seconds).
 const IDLE_TIMEOUT_MS: u64 = 30_000;
+
+/// Absolute session lifetime: 2 minutes from authorization.
+pub const SESSION_EXPIRY_MS: u64 = 120_000;
+
+/// Per-session byte cap: 10 GiB.
+pub const SESSION_BYTE_CAP: u64 = 10 * 1024 * 1024 * 1024;
+
+/// Exchange timeout: both endpoints must bind within 10 seconds of authorization.
+pub const EXCHANGE_TIMEOUT_MS: u64 = 10_000;
+
+/// Rate limit: 5 Mbps per session = 625_000 bytes per second.
+pub const RATE_LIMIT_BYTES_PER_SEC: u64 = 625_000;
+
+/// Failed token lookups from one source IP that trigger a temporary block.
+const BLOCKLIST_THRESHOLD: u64 = 20;
+
+/// Rolling window (60 seconds) over which failed lookups are counted for the blocklist.
+const BLOCKLIST_WINDOW_MS: u64 = 60_000;
 
 /// Lifecycle state of a relay forwarding context.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,6 +56,14 @@ pub struct EndpointBinding {
     pub addr: Option<SocketAddr>,
 }
 
+/// Token-bucket rate limiter tracking per-session forwarding bandwidth.
+pub struct RateBucket {
+    /// Tokens available (bytes). Refilled at `RATE_LIMIT_BYTES_PER_SEC`.
+    pub tokens: f64,
+    /// Last refill timestamp (ms).
+    pub last_refill_ms: u64,
+}
+
 /// A live forwarding context binding a relay token to exactly two authenticated endpoints.
 ///
 /// The relay token is the only identifier used on the data plane.
@@ -55,6 +81,14 @@ pub struct ForwardingContext {
     pub state: ForwardingState,
     /// Timestamp (ms) of the last forwarded packet, used for idle-timeout tracking.
     pub last_active_ms: u64,
+    /// Absolute expiry timestamp (ms since epoch). Set to authorize_pair time + 120_000.
+    pub expires_at_ms: u64,
+    /// Total bytes forwarded in this session (both directions combined).
+    pub bytes_forwarded: u64,
+    /// Time (ms) when authorize_pair was called — used for exchange timeout.
+    pub authorized_at_ms: u64,
+    /// Token-bucket rate limiter for per-session bandwidth control.
+    pub rate_bucket: RateBucket,
 }
 
 /// The forwarding table: O(1) lookup from token to context, with idle-timeout enforcement.
@@ -66,11 +100,14 @@ pub struct ForwardingContext {
 ///   binding for the initiator or target.
 /// - Spoofed or unassociated source addresses are silently dropped.
 /// - NAT rebinding is only accepted via a new signed `RelayEstablishRequest`.
+/// - Repeated failed token lookups from a source IP trigger a temporary blocklist.
 pub struct ForwardingTable {
     /// Primary store: intent_id -> context.
     contexts: RwLock<HashMap<[u8; 16], ForwardingContext>>,
     /// Fast routing index: relay_token -> intent_id.
     token_index: RwLock<HashMap<[u8; 32], [u8; 16]>>,
+    /// Failed lookup counter per source IP: (count, window_start_ms).
+    failed_lookups: RwLock<HashMap<IpAddr, (u64, u64)>>,
     clock: Arc<dyn Clock>,
 }
 
@@ -80,6 +117,7 @@ impl ForwardingTable {
         Self {
             contexts: RwLock::new(HashMap::new()),
             token_index: RwLock::new(HashMap::new()),
+            failed_lookups: RwLock::new(HashMap::new()),
             clock,
         }
     }
@@ -109,6 +147,13 @@ impl ForwardingTable {
             },
             state: ForwardingState::Authorized,
             last_active_ms: now,
+            expires_at_ms: now + SESSION_EXPIRY_MS,
+            bytes_forwarded: 0,
+            authorized_at_ms: now,
+            rate_bucket: RateBucket {
+                tokens: RATE_LIMIT_BYTES_PER_SEC as f64,
+                last_refill_ms: now,
+            },
         };
 
         self.contexts
@@ -153,6 +198,12 @@ impl ForwardingTable {
             return Err("Forwarding session has expired due to inactivity");
         }
 
+        // Absolute session expiry check during binding.
+        if now >= ctx.expires_at_ms {
+            ctx.state = ForwardingState::RelayExpired;
+            return Err("Forwarding session has reached its absolute expiry");
+        }
+
         // Only the authorized pair members may update bindings.
         if ctx.initiator.device_id == device_id {
             ctx.initiator.addr = Some(addr);
@@ -174,27 +225,88 @@ impl ForwardingTable {
         Ok(())
     }
 
+    /// Records a failed token lookup from a source IP for brute-force protection.
+    fn record_failed_lookup(&self, ip: IpAddr, now: u64) {
+        let mut failed = self
+            .failed_lookups
+            .write()
+            .unwrap_or_else(|e| e.into_inner());
+        let entry = failed.entry(ip).or_insert((0, now));
+        if now.saturating_sub(entry.1) > BLOCKLIST_WINDOW_MS {
+            *entry = (1, now);
+        } else {
+            entry.0 += 1;
+        }
+    }
+
+    /// Returns `true` if the source IP is currently blocklisted for repeated failed lookups.
+    pub fn is_blocklisted(&self, ip: &IpAddr) -> bool {
+        let now = self.clock.now_ms();
+        let failed = self
+            .failed_lookups
+            .read()
+            .unwrap_or_else(|e| e.into_inner());
+        match failed.get(ip) {
+            Some((count, window_start)) => {
+                *count >= BLOCKLIST_THRESHOLD
+                    && now.saturating_sub(*window_start) <= BLOCKLIST_WINDOW_MS
+            }
+            None => false,
+        }
+    }
+
     /// Looks up the destination address for a forwarded packet.
     ///
     /// Returns `None` and silently drops the packet if:
     /// - The token is unknown.
+    /// - The source IP is blocklisted for repeated failed lookups.
     /// - The context is not in `RelayActive` state.
     /// - The source address does not match the registered binding (anti-spoofing).
-    /// - The idle timeout has been exceeded.
+    /// - The idle timeout, absolute session expiry, or byte cap has been reached.
+    /// - The packet would exceed the per-session rate limit.
     ///
     /// No error is returned to avoid leaking information to potential attackers.
-    pub fn get_destination(&self, token: &[u8; 32], source_addr: SocketAddr) -> Option<SocketAddr> {
+    pub fn get_destination(
+        &self,
+        token: &[u8; 32],
+        source_addr: SocketAddr,
+        packet_len: usize,
+    ) -> Option<SocketAddr> {
         let now = self.clock.now_ms();
+
+        // Brute-force blocklist: block the source IP before any work.
+        if self.is_blocklisted(&source_addr.ip()) {
+            return None;
+        }
 
         let intent_id = {
             let idx = self.token_index.read().unwrap_or_else(|e| e.into_inner());
-            *idx.get(token)?
+            match idx.get(token) {
+                Some(id) => *id,
+                None => {
+                    // Failed lookup: record for brute-force protection, then drop silently.
+                    self.record_failed_lookup(source_addr.ip(), now);
+                    return None;
+                }
+            }
         };
 
         let mut contexts = self.contexts.write().unwrap_or_else(|e| e.into_inner());
         let ctx = contexts.get_mut(&intent_id)?;
 
         if ctx.state != ForwardingState::RelayActive {
+            return None;
+        }
+
+        // Absolute session expiry (2 minutes from authorization, regardless of activity).
+        if now >= ctx.expires_at_ms {
+            ctx.state = ForwardingState::RelayExpired;
+            return None;
+        }
+
+        // Per-session byte cap: close the session when exceeded.
+        if ctx.bytes_forwarded >= SESSION_BYTE_CAP {
+            ctx.state = ForwardingState::RelayExpired;
             return None;
         }
 
@@ -209,15 +321,32 @@ impl ForwardingTable {
 
         // Source must exactly match one of the two authorized bindings.
         // An unregistered or spoofed source address results in a silent drop.
-        if source_addr == init_addr {
-            ctx.last_active_ms = now;
-            Some(targ_addr)
+        let destination = if source_addr == init_addr {
+            targ_addr
         } else if source_addr == targ_addr {
-            ctx.last_active_ms = now;
-            Some(init_addr)
+            init_addr
         } else {
-            None
+            return None;
+        };
+
+        // Token-bucket rate limiting: refill, then check the packet fits.
+        let elapsed_s = now.saturating_sub(ctx.rate_bucket.last_refill_ms) as f64 / 1000.0;
+        ctx.rate_bucket.tokens = (ctx.rate_bucket.tokens
+            + elapsed_s * RATE_LIMIT_BYTES_PER_SEC as f64)
+            .min(RATE_LIMIT_BYTES_PER_SEC as f64);
+        ctx.rate_bucket.last_refill_ms = now;
+
+        let packet_len_f = packet_len as f64;
+        if ctx.rate_bucket.tokens < packet_len_f {
+            return None;
         }
+
+        // Charge the packet against the bucket and the session byte counter.
+        ctx.rate_bucket.tokens -= packet_len_f;
+        ctx.bytes_forwarded += packet_len as u64;
+        ctx.last_active_ms = now;
+
+        Some(destination)
     }
 
     /// Explicitly closes a forwarding context (endpoint disconnect or revocation).
@@ -240,10 +369,20 @@ impl ForwardingTable {
         let mut to_remove: Vec<[u8; 16]> = Vec::new();
 
         for (id, ctx) in contexts.iter_mut() {
-            let timed_out = ctx.state == ForwardingState::RelayActive
+            let idle_timed_out = ctx.state == ForwardingState::RelayActive
                 && now.saturating_sub(ctx.last_active_ms) > IDLE_TIMEOUT_MS;
 
-            if timed_out {
+            // Exchange timeout: authorized/requested sessions must bind within 10 seconds.
+            let exchange_timed_out = matches!(
+                ctx.state,
+                ForwardingState::Authorized | ForwardingState::RelayRequested
+            ) && now.saturating_sub(ctx.authorized_at_ms)
+                > EXCHANGE_TIMEOUT_MS;
+
+            // Absolute expiry applies regardless of state.
+            let absolute_expired = now >= ctx.expires_at_ms;
+
+            if idle_timed_out || exchange_timed_out || absolute_expired {
                 ctx.state = ForwardingState::RelayExpired;
             }
 
@@ -272,5 +411,27 @@ impl ForwardingTable {
             .unwrap_or_else(|e| e.into_inner())
             .get(intent_id)
             .map(|c| c.state)
+    }
+
+    /// Returns the total bytes forwarded by a context (for testing/audit).
+    pub fn bytes_forwarded_of(&self, intent_id: &[u8; 16]) -> Option<u64> {
+        self.contexts
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(intent_id)
+            .map(|c| c.bytes_forwarded)
+    }
+
+    /// Overrides the forwarded-byte counter for a context (used by tests to simulate
+    /// a session at or beyond its byte cap without forwarding gigabytes of data).
+    pub fn set_bytes_forwarded(&self, intent_id: &[u8; 16], bytes: u64) -> bool {
+        let mut contexts = self.contexts.write().unwrap_or_else(|e| e.into_inner());
+        match contexts.get_mut(intent_id) {
+            Some(ctx) => {
+                ctx.bytes_forwarded = bytes;
+                true
+            }
+            None => false,
+        }
     }
 }

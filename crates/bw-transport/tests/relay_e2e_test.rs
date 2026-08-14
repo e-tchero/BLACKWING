@@ -61,7 +61,7 @@ async fn spawn_relay_forwarder(
             }
             let token: [u8; RELAY_HEADER_LEN] = buf[..RELAY_HEADER_LEN].try_into().unwrap();
 
-            if let Some(dest) = table.get_destination(&token, src) {
+            if let Some(dest) = table.get_destination(&token, src, n) {
                 // Forward the full datagram (token + QUIC payload) verbatim.
                 let _ = relay_socket.send_to(&buf[..n], dest).await;
             }
