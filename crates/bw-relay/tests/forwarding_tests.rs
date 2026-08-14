@@ -1,4 +1,4 @@
-﻿//! Phase 3 forwarding tests for bw-relay.
+//! Phase 3 forwarding tests for bw-relay.
 //!
 //! Covers:
 //!   1. A -> Relay -> B happy path
@@ -23,11 +23,11 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use bw_crypto::SigningKey;
 use bw_relay::{
     clock::MockClock,
     forwarding::{ForwardingState, ForwardingTable, MAX_FORWARDING_PAYLOAD},
 };
-use bw_crypto::SigningKey;
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -189,7 +189,10 @@ fn test_forwarding_spoofed_source_drops() {
 
     // Attacker knows the token but sends from an unregistered address
     let dest = table.get_destination(&token, addr_attacker);
-    assert!(dest.is_none(), "Spoofed source address must be silently dropped");
+    assert!(
+        dest.is_none(),
+        "Spoofed source address must be silently dropped"
+    );
 }
 
 // ── 7. Authenticated NAT rebinding ────────────────────────────────────────────
@@ -204,7 +207,9 @@ fn test_forwarding_authenticated_nat_rebinding() {
     let addr_b = make_addr(10018);
 
     table.authorize_pair(intent_id, token, init_id, tgt_id);
-    table.update_binding(intent_id, init_id, addr_a_old).unwrap();
+    table
+        .update_binding(intent_id, init_id, addr_a_old)
+        .unwrap();
     table.update_binding(intent_id, tgt_id, addr_b).unwrap();
 
     // Old address works
@@ -212,7 +217,9 @@ fn test_forwarding_authenticated_nat_rebinding() {
 
     // Authenticated rebinding: relay receives signed RelayEstablishRequest
     // (in production) and calls update_binding again with the new addr.
-    table.update_binding(intent_id, init_id, addr_a_new).unwrap();
+    table
+        .update_binding(intent_id, init_id, addr_a_new)
+        .unwrap();
 
     // Old address is now stale - must be dropped
     assert!(table.get_destination(&token, addr_a_old).is_none());
@@ -239,7 +246,10 @@ fn test_forwarding_rebind_rejected_on_closed() {
 
     // A new signed rebind on a closed session must be rejected
     let result = table.update_binding(intent_id, init_id, make_addr(10021));
-    assert!(result.is_err(), "Rebinding a closed session must be rejected");
+    assert!(
+        result.is_err(),
+        "Rebinding a closed session must be rejected"
+    );
 }
 
 // ── 9. Simultaneous rebinding by both peers ────────────────────────────────────
@@ -255,11 +265,15 @@ fn test_forwarding_simultaneous_rebinding() {
     let addr_b_new = make_addr(10025);
 
     table.authorize_pair(intent_id, token, init_id, tgt_id);
-    table.update_binding(intent_id, init_id, addr_a_old).unwrap();
+    table
+        .update_binding(intent_id, init_id, addr_a_old)
+        .unwrap();
     table.update_binding(intent_id, tgt_id, addr_b_old).unwrap();
 
     // Both rebind simultaneously
-    table.update_binding(intent_id, init_id, addr_a_new).unwrap();
+    table
+        .update_binding(intent_id, init_id, addr_a_new)
+        .unwrap();
     table.update_binding(intent_id, tgt_id, addr_b_new).unwrap();
 
     // After both rebinds, forwarding must reflect new addresses
@@ -313,7 +327,10 @@ fn test_forwarding_close_prevents_forwarding() {
 
     table.close(intent_id);
 
-    assert_eq!(table.state_of(&intent_id), Some(ForwardingState::RelayClosed));
+    assert_eq!(
+        table.state_of(&intent_id),
+        Some(ForwardingState::RelayClosed)
+    );
     assert!(table.get_destination(&token, addr_a).is_none());
 }
 
@@ -328,13 +345,22 @@ fn test_forwarding_state_machine_transitions() {
     let addr_b = make_addr(10031);
 
     table.authorize_pair(intent_id, token, init_id, tgt_id);
-    assert_eq!(table.state_of(&intent_id), Some(ForwardingState::Authorized));
+    assert_eq!(
+        table.state_of(&intent_id),
+        Some(ForwardingState::Authorized)
+    );
 
     table.update_binding(intent_id, init_id, addr_a).unwrap();
-    assert_eq!(table.state_of(&intent_id), Some(ForwardingState::RelayRequested));
+    assert_eq!(
+        table.state_of(&intent_id),
+        Some(ForwardingState::RelayRequested)
+    );
 
     table.update_binding(intent_id, tgt_id, addr_b).unwrap();
-    assert_eq!(table.state_of(&intent_id), Some(ForwardingState::RelayActive));
+    assert_eq!(
+        table.state_of(&intent_id),
+        Some(ForwardingState::RelayActive)
+    );
 }
 
 // ── 13. Forwarding not available in RelayRequested (only one side bound) ───────
@@ -350,7 +376,10 @@ fn test_forwarding_not_active_until_both_bound() {
     table.update_binding(intent_id, init_id, addr_a).unwrap();
 
     // Only one side bound -> RelayRequested -> no forwarding yet
-    assert_eq!(table.state_of(&intent_id), Some(ForwardingState::RelayRequested));
+    assert_eq!(
+        table.state_of(&intent_id),
+        Some(ForwardingState::RelayRequested)
+    );
     assert!(table.get_destination(&token, addr_a).is_none());
 }
 

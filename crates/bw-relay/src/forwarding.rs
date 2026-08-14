@@ -111,8 +111,14 @@ impl ForwardingTable {
             last_active_ms: now,
         };
 
-        self.contexts.write().unwrap_or_else(|e| e.into_inner()).insert(intent_id, ctx);
-        self.token_index.write().unwrap_or_else(|e| e.into_inner()).insert(token, intent_id);
+        self.contexts
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(intent_id, ctx);
+        self.token_index
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(token, intent_id);
     }
 
     /// Authenticates and records the data-plane SocketAddr for one endpoint of the pair.
@@ -129,7 +135,9 @@ impl ForwardingTable {
         let now = self.clock.now_ms();
         let mut contexts = self.contexts.write().unwrap_or_else(|e| e.into_inner());
 
-        let ctx = contexts.get_mut(&intent_id).ok_or("Forwarding session not found")?;
+        let ctx = contexts
+            .get_mut(&intent_id)
+            .ok_or("Forwarding session not found")?;
 
         // Reject updates to terminated or expired contexts.
         match ctx.state {
@@ -175,11 +183,7 @@ impl ForwardingTable {
     /// - The idle timeout has been exceeded.
     ///
     /// No error is returned to avoid leaking information to potential attackers.
-    pub fn get_destination(
-        &self,
-        token: &[u8; 32],
-        source_addr: SocketAddr,
-    ) -> Option<SocketAddr> {
+    pub fn get_destination(&self, token: &[u8; 32], source_addr: SocketAddr) -> Option<SocketAddr> {
         let now = self.clock.now_ms();
 
         let intent_id = {

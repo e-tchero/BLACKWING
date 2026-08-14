@@ -79,7 +79,7 @@ async fn test_end_to_end_streaming() {
     let _ = tracing_subscriber::fmt().with_test_writer().try_init();
 
     // 1. Setup QUIC Server
-    let server = QuicServer::bind("127.0.0.1:0".parse().unwrap()).unwrap();
+    let server = QuicServer::bind("127.0.0.1:0".parse().unwrap(), None).unwrap();
     let server_addr = server.endpoint.local_addr().unwrap();
 
     let server_handle = tokio::spawn(async move {
@@ -117,7 +117,7 @@ async fn test_end_to_end_streaming() {
     });
 
     // 2. Setup QUIC Client
-    let client = QuicClient::bind().unwrap();
+    let client = QuicClient::bind(None).unwrap();
     let conn = client.connect(server_addr).await.unwrap();
 
     // 3. Setup Capture & Encoding Pipeline

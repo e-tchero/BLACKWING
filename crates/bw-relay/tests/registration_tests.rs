@@ -1,4 +1,4 @@
-﻿//! Tests for bw-relay registration and rendezvous.
+//! Tests for bw-relay registration and rendezvous.
 
 use bw_crypto::{DeviceId, SigningKey};
 use bw_relay::candidate::Candidate;
@@ -239,7 +239,8 @@ fn test_rendezvous_happy_path() {
     match accept_resp {
         RelayMessage::CandidateExchange {
             intent_id: id,
-            candidates, relay_token: _,
+            candidates,
+            relay_token: _,
         } => {
             assert_eq!(id, intent_id);
             assert_eq!(candidates.len(), 1);
@@ -261,7 +262,8 @@ fn test_rendezvous_happy_path() {
     match get_cand_resp {
         RelayMessage::CandidateExchange {
             intent_id: id,
-            candidates, relay_token: _,
+            candidates,
+            relay_token: _,
         } => {
             assert_eq!(id, intent_id);
             assert_eq!(candidates.len(), 1);

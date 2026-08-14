@@ -373,12 +373,8 @@ impl RelayServer {
             .map_err(|e| RelayError::Internal(e.into()))?;
 
         // Authorize the forwarding pair in the ForwardingTable
-        self.forwarding.authorize_pair(
-            id_arr,
-            relay_token,
-            initiator,
-            acceptor_device_id,
-        );
+        self.forwarding
+            .authorize_pair(id_arr, relay_token, initiator, acceptor_device_id);
 
         // Return the initiator's candidates and relay token to the acceptor
         Ok(RelayMessage::CandidateExchange {
@@ -450,7 +446,9 @@ impl RelayServer {
         let now = self.clock.now_ms();
 
         if now.abs_diff(timestamp) > TIMESTAMP_WINDOW_MS {
-            return Err(RelayError::AuthFailed("RelayEstablishRequest timestamp out of bounds"));
+            return Err(RelayError::AuthFailed(
+                "RelayEstablishRequest timestamp out of bounds",
+            ));
         }
 
         if intent_id.len() != 16 {
@@ -478,7 +476,9 @@ impl RelayServer {
             .map_err(|_| RelayError::AuthFailed("Signature conversion failed"))?;
         verify_key
             .verify(&payload, &Signature::from_bytes(sig_arr))
-            .map_err(|_| RelayError::AuthFailed("RelayEstablishRequest signature verification failed"))?;
+            .map_err(|_| {
+                RelayError::AuthFailed("RelayEstablishRequest signature verification failed")
+            })?;
 
         // Bind the authenticated network address
         let addr = peer_addr.ok_or(RelayError::AuthFailed(

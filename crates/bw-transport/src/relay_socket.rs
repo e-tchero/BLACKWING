@@ -19,8 +19,8 @@
 //! IP fragmentation across the relay hop.  The relay drops any packet whose
 //! total size (header + payload) exceeds 1200 bytes.
 
-use quinn::{AsyncUdpSocket, UdpPoller};
 use quinn::udp::{RecvMeta, Transmit};
+use quinn::{AsyncUdpSocket, UdpPoller};
 use std::{
     fmt,
     io::{self, IoSliceMut},
@@ -217,4 +217,3 @@ impl AsyncUdpSocket for RelayUdpSocket {
         false
     }
 }
-
