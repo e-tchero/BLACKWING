@@ -137,10 +137,10 @@ impl RendezvousRegistry {
         let initiator = intent.initiator;
         let initiator_candidates = intent.initiator_candidates.clone();
         intent.target_candidates = target_candidates;
-        
+
         let mut relay_token = [0u8; 32];
         getrandom::getrandom(&mut relay_token).map_err(|_| "Failed to generate random token")?;
-        
+
         intent.state = IntentState::Accepted { relay_token };
 
         Ok((initiator, initiator_candidates, relay_token))
