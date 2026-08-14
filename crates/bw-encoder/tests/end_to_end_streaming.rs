@@ -1,4 +1,5 @@
 #![allow(missing_docs)]
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use bw_capture::{CaptureBackend, CaptureError, CaptureThread, DisplayInfo, Frame, PixelFormat};
 use bw_encoder::h264::OpenH264Backend;
@@ -6,7 +7,6 @@ use bw_encoder::{EncodedFrame, EncoderBackend, EncoderPipeline};
 use bw_transport::{QuicClient, QuicServer};
 use tokio::sync::mpsc;
 use tokio::time::Duration;
-use tracing_subscriber;
 
 pub struct DummyCaptureBackend {
     width: u32,
@@ -99,7 +99,7 @@ async fn test_end_to_end_streaming() {
             assert_eq!(frame.width, 1280);
             assert_eq!(frame.height, 720);
             assert_eq!(frame.codec, bw_encoder::Codec::H264);
-            assert!(frame.payload.len() > 0);
+            assert!(!frame.payload.is_empty());
 
             frames_received += 1;
             println!(

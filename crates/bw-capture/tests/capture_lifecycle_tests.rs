@@ -29,6 +29,12 @@ impl MockCaptureBackend {
     }
 }
 
+impl Default for MockCaptureBackend {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CaptureBackend for MockCaptureBackend {
     fn displays(&self) -> Result<Vec<DisplayInfo>, CaptureError> {
         Ok(vec![self.mock_display.clone()])
