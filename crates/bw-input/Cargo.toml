@@ -1,0 +1,26 @@
+[package]
+name = "bw-input"
+version = "0.1.0"
+edition = "2021"
+description = "OS-level input injection for BLACKWING (Win32 SendInput)"
+
+[dependencies]
+thiserror = "1.0"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.61", features = ["Win32_UI_Input_KeyboardAndMouse"] }
+
+# Mirrors the workspace lint policy (see root Cargo.toml) with one deliberate
+# override: `unsafe_code` is `allow` (not `forbid`) because the Win32
+# `SendInput` FFI in this crate inherently requires `unsafe`. Justification is
+# documented in src/lib.rs. Per-crate overrides cannot be merged with
+# `[lints] workspace = true`, so the full table is spelled out here.
+[lints.rust]
+unsafe_code = "allow"
+missing_docs = "deny"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+todo = "deny"
+dbg_macro = "deny"

@@ -11,6 +11,7 @@ members = [
     "crates/bw-encoder",
     "crates/bw-relay",
     "crates/bw-auth",
+    "crates/bw-input",
 ]
 
 [workspace.dependencies]

@@ -154,6 +154,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "bw-input"
+version = "0.1.0"
+dependencies = [
+ "thiserror 1.0.69",
+ "windows",
+]
+
+[[package]]
 name = "bw-net"
 version = "0.1.0"
 dependencies = [
