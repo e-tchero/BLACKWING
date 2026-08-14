@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: ""
+
+jobs:
+  ci:
+    name: Build, Test, Lint
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable (GNU)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable-x86_64-pc-windows-gnu
+          components: rustfmt, clippy
+
+      - name: Install MinGW
+        run: |
+          scoop install mingw
+        shell: powershell
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: cargo fmt --check
+        run: cargo fmt --check
+
+      - name: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: cargo test --all-targets
+        run: cargo test --all-targets
+        timeout-minutes: 10
