@@ -15,6 +15,7 @@ pub mod header;
 pub mod message;
 pub mod reliability;
 pub mod routing;
+pub mod scheduler;
 pub mod session;
 pub mod transport;
 pub mod version;
