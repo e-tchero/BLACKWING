@@ -3,22 +3,31 @@ use crate::frame::Frame;
 use crate::monitor::DisplayInfo;
 use thiserror::Error;
 
+/// Errors produced by capture backend operations.
 #[derive(Debug, Error)]
 pub enum CaptureError {
+    /// Backend initialization failed with the given detail.
     #[error("Capture backend initialization failed: {0}")]
     InitFailed(String),
+    /// Display enumeration failed with the given detail.
     #[error("Failed to enumerate displays: {0}")]
     DisplayEnumerationFailed(String),
+    /// The requested display identifier is invalid or unavailable.
     #[error("Invalid display specified")]
     InvalidDisplay,
+    /// Acquiring the next frame failed with the given detail.
     #[error("Failed to acquire next frame: {0}")]
     FrameAcquisitionFailed(String),
+    /// The capture session was stopped.
     #[error("Capture was stopped")]
     Stopped,
+    /// Screen capture requires elevated privileges or user consent.
     #[error("Access denied. Screen capture requires elevated privileges or user consent")]
     AccessDenied,
+    /// The frame pixel format is not supported by this backend.
     #[error("Unsupported pixel format")]
     UnsupportedFormat,
+    /// The current platform is not supported by this backend.
     #[error("Platform not supported")]
     PlatformNotSupported,
 }

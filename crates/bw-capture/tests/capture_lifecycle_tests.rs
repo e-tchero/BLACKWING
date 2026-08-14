@@ -1,3 +1,5 @@
+#![allow(missing_docs)] // Integration-test mock; docs not required (repo convention)
+#![allow(clippy::unwrap_used, clippy::expect_used)] // Test code may panic on failure (repo convention)
 use bw_capture::{CaptureBackend, CaptureError, CursorInfo, DisplayInfo, Frame, PixelFormat};
 
 /// A mock capture backend for testing the interface contracts.

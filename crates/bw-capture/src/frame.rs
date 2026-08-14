@@ -10,9 +10,13 @@ pub enum PixelFormat {
 /// A rectangular region of a display that changed since the previous frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DirtyRect {
+    /// Left edge of the region in pixels.
     pub x: u32,
+    /// Top edge of the region in pixels.
     pub y: u32,
+    /// Region width in pixels.
     pub width: u32,
+    /// Region height in pixels.
     pub height: u32,
 }
 
@@ -48,8 +52,11 @@ impl DirtyRect {
 /// A rectangular region of a display that was copied from another location (moved).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MoveRect {
+    /// X coordinate of the source point the region moved from.
     pub source_point_x: u32,
+    /// Y coordinate of the source point the region moved from.
     pub source_point_y: u32,
+    /// Destination region the moved content now occupies.
     pub dest_rect: DirtyRect,
 }
 

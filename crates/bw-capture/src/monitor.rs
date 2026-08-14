@@ -11,6 +11,7 @@ pub struct DisplayInfo {
     pub height: u32,
     /// Position of the top-left corner in the virtual desktop coordinate space.
     pub virtual_x: i32,
+    /// Vertical position of the top-left corner in the virtual desktop coordinate space.
     pub virtual_y: i32,
     /// Nominal refresh rate in Hz.
     pub refresh_hz: u32,

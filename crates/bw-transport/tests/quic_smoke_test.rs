@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(missing_docs)]
 use bw_transport::{QuicClient, QuicServer};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 

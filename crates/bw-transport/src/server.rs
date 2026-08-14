@@ -4,17 +4,26 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use thiserror::Error;
 
+/// Errors produced by the QUIC server endpoint.
 #[derive(Debug, Error)]
 pub enum QuicServerError {
+    /// Binding or I/O failure.
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+    /// TLS certificate generation failed.
     #[error("TLS certificate error: {0}")]
     Cert(#[from] cert::CertError),
+    /// The QUIC endpoint could not be constructed.
     #[error("QUIC endpoint error")]
     EndpointError,
 }
 
+/// A QUIC server endpoint.
+///
+/// Listens on the given address, optionally wrapping the socket with a
+/// `RelayUdpSocket` so inbound traffic arrives via a relay.
 pub struct QuicServer {
+    /// The underlying Quinn endpoint.
     pub endpoint: Endpoint,
 }
 

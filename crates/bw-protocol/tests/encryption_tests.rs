@@ -1,3 +1,5 @@
+#![allow(missing_docs)] // Integration-test crate (repo convention)
+#![allow(clippy::unwrap_used, clippy::expect_used)] // Test code may panic on failure (repo convention)
 use bw_crypto::SymmetricKey;
 use bw_protocol::encryption::{EncryptionContext, FrameEncryptor, KeyRotationPolicy, SessionKeys};
 use bw_protocol::error::ProtocolError;

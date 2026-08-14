@@ -4,24 +4,34 @@ use bw_protocol::header::PacketHeader;
 use quinn::{RecvStream, SendStream};
 use thiserror::Error;
 
+/// Errors produced by the QUIC protocol adapter.
 #[derive(Debug, Error)]
 pub enum AdapterError {
+    /// Failed to write the frame to the QUIC stream.
     #[error("Failed to write to stream: {0}")]
     Write(#[from] quinn::WriteError),
+    /// Failed to read a frame from the QUIC stream.
     #[error("Failed to read from stream: {0}")]
     Read(#[from] quinn::ReadError),
+    /// The frame failed protocol-level decoding.
     #[error("Protocol error: {0}")]
     Protocol(#[from] bw_protocol::error::ProtocolError),
+    /// The peer closed the stream unexpectedly.
     #[error("Connection closed unexpectedly")]
     Closed,
 }
 
+/// Adapts Quinn QUIC streams to the `bw-protocol` frame codec.
+///
+/// Serializes `ProtocolFrame`s onto the send stream and decodes frames from
+/// the receive stream.
 pub struct QuicProtocolAdapter {
     send: SendStream,
     recv: RecvStream,
 }
 
 impl QuicProtocolAdapter {
+    /// Creates an adapter wrapping the given QUIC send/receive streams.
     pub fn new(send: SendStream, recv: RecvStream) -> Self {
         Self { send, recv }
     }
@@ -74,6 +84,7 @@ impl QuicProtocolAdapter {
         Ok(frame)
     }
 
+    /// Gracefully finishes the underlying send stream.
     pub async fn close(&mut self) {
         let _ = self.send.finish();
     }

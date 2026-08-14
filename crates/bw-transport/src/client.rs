@@ -4,17 +4,26 @@ use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::sync::Arc;
 use thiserror::Error;
 
+/// Errors produced by the QUIC client endpoint.
 #[derive(Debug, Error)]
 pub enum QuicClientError {
+    /// Binding or I/O failure.
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+    /// The connection attempt failed.
     #[error("Connect error: {0}")]
     Connect(#[from] quinn::ConnectError),
+    /// The established connection failed.
     #[error("Connection error: {0}")]
     Connection(#[from] quinn::ConnectionError),
 }
 
+/// A QUIC client endpoint.
+///
+/// Binds an ephemeral local UDP port, optionally wrapping the socket with a
+/// `RelayUdpSocket` so all traffic is routed through a relay.
 pub struct QuicClient {
+    /// The underlying Quinn endpoint.
     pub endpoint: Endpoint,
 }
 

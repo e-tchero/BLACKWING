@@ -1,3 +1,5 @@
+#![allow(missing_docs)] // Benchmark crate (repo convention)
+#![allow(clippy::unwrap_used, clippy::expect_used)] // Bench code may panic on setup (repo convention)
 use bw_crypto::SymmetricKey;
 use bw_protocol::encryption::{EncryptionContext, KeyRotationPolicy, SessionKeys};
 use bw_protocol::frame::OwnedProtocolFrame;

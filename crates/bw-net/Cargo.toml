@@ -13,3 +13,6 @@ tracing = "0.1"
 [dev-dependencies]
 tokio = { workspace = true }
 bw-crypto = { path = "../bw-crypto" }
+
+[lints]
+workspace = true

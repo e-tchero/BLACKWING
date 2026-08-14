@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(missing_docs)]
 use bw_crypto::DeviceId;
 use bw_protocol::error::ProtocolError;
 use bw_protocol::handshake::{

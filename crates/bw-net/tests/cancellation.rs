@@ -1,3 +1,5 @@
+#![allow(missing_docs)] // Integration-test crate (repo convention)
+#![allow(clippy::unwrap_used, clippy::expect_used)] // Test code may panic on failure (repo convention)
 //! Integration test: Deterministic cancellation.
 //!
 //! Verifies the Phase 3 goal:

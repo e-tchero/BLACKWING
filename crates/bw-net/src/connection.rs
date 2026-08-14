@@ -61,7 +61,9 @@ impl ConnectionHandle {
 
 /// Internal state tracked by the manager for an active connection.
 pub struct ConnectionState {
+    /// Token used to cancel/close the connection task.
     pub cancel_token: CancellationToken,
+    /// Handle to the connection's receiver task.
     pub receiver_handle: JoinHandle<Result<(), NetError>>,
 }
 
