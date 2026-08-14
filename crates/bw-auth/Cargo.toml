@@ -1,0 +1,14 @@
+[package]
+name = "bw-auth"
+version = "0.1.0"
+edition = "2021"
+
+[lints]
+workspace = true
+
+[dependencies]
+opaque-ke = { workspace = true }
+rand = { workspace = true }
+sha2 = "0.10"
+thiserror = "1.0"
+zeroize = { workspace = true }

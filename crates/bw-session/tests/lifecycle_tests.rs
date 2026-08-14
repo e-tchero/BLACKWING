@@ -1,7 +1,7 @@
 #![allow(clippy::field_reassign_with_default)]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 #![allow(missing_docs)]
-use bw_crypto::SymmetricKey;
+use bw_auth::{client, server};
 use bw_protocol::header::{PacketHeader, PROTOCOL_MAGIC};
 use bw_protocol::routing::SessionId;
 use bw_protocol::session::SessionManager;
@@ -28,13 +28,35 @@ async fn test_secure_connection_lifecycle() {
 
     let session_id = SessionId([42; 16]);
 
-    // Shared pre-agreed master secret (in WP-6.3+ this will be negotiated via ECDH)
-    let mut master_secret_bytes = [0u8; 32];
-    master_secret_bytes[0] = 0xAB;
-    let master_secret = SymmetricKey(master_secret_bytes);
+    // Authenticate via OPAQUE (RFC 9381): registration then login produces the
+    // shared session key used as the handshake master secret.
+    const PASSWORD: &[u8] = b"correct horse battery staple";
+    const IDENTIFIER: &[u8] = b"alice@example.com";
+
+    let auth_setup = server::new_setup();
+    // Registration (4 messages, in-process for the test).
+    let reg_start = client::start_registration(PASSWORD).unwrap();
+    let (reg_req, reg_state) = (reg_start.request, reg_start.state);
+    let reg_resp = server::start_registration(&auth_setup, reg_req, IDENTIFIER).unwrap();
+    let reg_upload = client::finish_registration(reg_state, reg_resp, PASSWORD).unwrap();
+    let password_file = server::finish_registration(reg_upload);
+
+    // Client-side login.
+    let login_start = client::start_login(PASSWORD).unwrap();
+    let (login_req, login_state) = (login_start.request, login_start.state);
+    // Server-side login.
+    let server_login =
+        server::start_login(&auth_setup, password_file, login_req, IDENTIFIER).unwrap();
+    let (cred_resp, server_login_state) = (server_login.response, server_login.state);
+    // Client finishes login; server finishes login; keys must match.
+    let client_login = client::finish_login(login_state, cred_resp, PASSWORD).unwrap();
+    let client_session_key = client_login.session_key;
+    let server_session_key =
+        server::finish_login(server_login_state, client_login.finalization).unwrap();
+    assert_eq!(client_session_key.as_bytes(), server_session_key.as_bytes());
 
     let sm_server = server_session_manager.clone();
-    let ms_server = master_secret.clone();
+    let server_key_bytes = server_session_key.as_bytes().to_vec();
 
     // Spawn server task
     let server_task = tokio::spawn(async move {
@@ -53,7 +75,7 @@ async fn test_secure_connection_lifecycle() {
 
         // handshake() -> State: Active, session_created()
         secure_conn
-            .server_handshake(&ms_server)
+            .server_handshake(&server_key_bytes)
             .await
             .expect("Server handshake should succeed");
 
@@ -91,7 +113,7 @@ async fn test_secure_connection_lifecycle() {
 
     // handshake() -> State: Active, session_created()
     secure_conn
-        .client_handshake(&master_secret)
+        .client_handshake(client_session_key.as_bytes())
         .await
         .expect("Client handshake should succeed");
 

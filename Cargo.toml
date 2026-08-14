@@ -10,6 +10,7 @@ members = [
     "crates/bw-capture",
     "crates/bw-encoder",
     "crates/bw-relay",
+    "crates/bw-auth",
 ]
 
 [workspace.dependencies]
@@ -17,6 +18,8 @@ bytemuck = { version = "1.16", features = ["derive"] }
 serde = { version = "1.0", features = ["derive"] }
 zeroize = { version = "1.8", features = ["zeroize_derive"] }
 tokio = { version = "1.38", features = ["full"] }
+opaque-ke = "4"
+rand = "0.8"
 
 # ─────────────────────────────────────────────────────────
 # Workspace-wide lint policy.
