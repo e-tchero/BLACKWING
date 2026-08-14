@@ -2,7 +2,6 @@
 
 use crate::lifecycle::{ConnectionState, Lifecycle};
 use bw_crypto::random::{OsRandom, SecureRandom};
-use bw_crypto::SymmetricKey;
 use bw_protocol::encryption::{EncryptionContext, KeyRotationPolicy, SessionKeys};
 use bw_protocol::frame::ProtocolFrame;
 use bw_protocol::handshake::derive_session_keys;
@@ -35,6 +34,9 @@ pub enum SecureConnError {
     /// Failed to generate a cryptographic nonce.
     #[error("Failed to generate cryptographic nonce")]
     NonceFailed,
+    /// The crypto layer reported an error.
+    #[error("Crypto error: {0}")]
+    Crypto(#[from] bw_crypto::error::CryptoError),
 }
 
 /// A secure, encrypted session built on a QUIC protocol adapter.
@@ -66,10 +68,11 @@ impl SecureConnection {
     }
 
     /// Performs the client-side handshake to establish the secure session.
-    pub async fn client_handshake(
-        &mut self,
-        master_secret: &SymmetricKey,
-    ) -> Result<(), SecureConnError> {
+    ///
+    /// `session_key` is the key material produced by a successful OPAQUE login
+    /// (see `bw-auth`); it is expanded to a 32-byte channel master secret via
+    /// HKDF before the nonce-based session key derivation.
+    pub async fn client_handshake(&mut self, session_key: &[u8]) -> Result<(), SecureConnError> {
         self.lifecycle
             .transition(ConnectionState::Connected, ConnectionState::Handshaking)
             .map_err(|_| SecureConnError::LifecycleError)?;
@@ -103,10 +106,12 @@ impl SecureConnection {
         let mut server_nonce = [0u8; 16];
         server_nonce.copy_from_slice(resp_frame.payload);
 
-        // 3. Derive keys and register session
+        // 3. Derive the 32-byte channel master secret from the OPAQUE session
+        //    key, then derive per-role keys and register the session.
+        let master_secret = bw_crypto::hkdf_derive(None, session_key, Some(b"opaque-session"))?;
         self.session_manager.create_session_from_handshake(
             self.session_id,
-            master_secret,
+            &master_secret,
             &client_nonce,
             &server_nonce,
             KeyRotationPolicy::Manual,
@@ -119,10 +124,11 @@ impl SecureConnection {
     }
 
     /// Performs the server-side handshake to establish the secure session.
-    pub async fn server_handshake(
-        &mut self,
-        master_secret: &SymmetricKey,
-    ) -> Result<(), SecureConnError> {
+    ///
+    /// `session_key` is the key material produced by a successful OPAQUE login
+    /// (see `bw-auth`); it is expanded to a 32-byte channel master secret via
+    /// HKDF before the nonce-based session key derivation.
+    pub async fn server_handshake(&mut self, session_key: &[u8]) -> Result<(), SecureConnError> {
         self.lifecycle
             .transition(ConnectionState::Connected, ConnectionState::Handshaking)
             .map_err(|_| SecureConnError::LifecycleError)?;
@@ -162,7 +168,8 @@ impl SecureConnection {
         //   send_key = HKDF(salt, "client-key")  → client encrypts with this
         //   recv_key = HKDF(salt, "server-key")  → server encrypts with this
         // The server therefore SWAPS the roles: its send_key = "server-key", recv_key = "client-key".
-        let client_keys = derive_session_keys(master_secret, &client_nonce, &server_nonce)
+        let master_secret = bw_crypto::hkdf_derive(None, session_key, Some(b"opaque-session"))?;
+        let client_keys = derive_session_keys(&master_secret, &client_nonce, &server_nonce)
             .map_err(SecureConnError::Protocol)?;
 
         // Swap send/recv so the server encrypts outbound with "server-key"
