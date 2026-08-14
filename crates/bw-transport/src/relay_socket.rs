@@ -187,6 +187,17 @@ impl AsyncUdpSocket for RelayUdpSocket {
                     }
                     let payload = &tmp[RELAY_HEADER_LEN..n];
                     let payload_len = payload.len();
+                    if buf.len() < payload_len {
+                        // Quinn's buffer is too small — drop this datagram.
+                        meta[0] = RecvMeta {
+                            addr,
+                            len: 0,
+                            stride: 0,
+                            ecn: None,
+                            dst_ip: None,
+                        };
+                        return Poll::Ready(Ok(1));
+                    }
                     // Copy stripped payload into Quinn's buffer.
                     buf[..payload_len].copy_from_slice(payload);
                     meta[0] = RecvMeta {
@@ -198,6 +209,17 @@ impl AsyncUdpSocket for RelayUdpSocket {
                     };
                 } else {
                     // Direct path: copy as-is.
+                    if buf.len() < n {
+                        // Quinn's buffer is too small — drop this datagram.
+                        meta[0] = RecvMeta {
+                            addr,
+                            len: 0,
+                            stride: 0,
+                            ecn: None,
+                            dst_ip: None,
+                        };
+                        return Poll::Ready(Ok(1));
+                    }
                     buf[..n].copy_from_slice(&tmp[..n]);
                     meta[0] = RecvMeta {
                         addr,
