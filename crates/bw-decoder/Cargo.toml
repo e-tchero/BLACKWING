@@ -1,0 +1,18 @@
+[package]
+name = "bw-decoder"
+version = "0.1.0"
+edition = "2024"
+description = "H.264 video decoding for BLACKWING (OpenH264)"
+
+[dependencies]
+# `EncodedFrame` (and its `Codec`/`FrameType` types) actually live in
+# `bw-encoder` — the decoder consumes exactly the encoder's output type.
+bw-encoder = { version = "0.1.0", path = "../bw-encoder" }
+# Declared for the upcoming protocol-layer integration (TASK-103: video frames
+# arriving via `bw-protocol` message envelopes will be decoded by this crate).
+bw-protocol = { version = "0.1.0", path = "../bw-protocol" }
+openh264 = "0.9.7"
+thiserror = "2.0.19"
+
+[lints]
+workspace = true

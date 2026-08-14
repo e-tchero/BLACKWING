@@ -142,6 +142,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "bw-decoder"
+version = "0.1.0"
+dependencies = [
+ "bw-encoder",
+ "bw-protocol",
+ "openh264",
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "bw-encoder"
 version = "0.1.0"
 dependencies = [
