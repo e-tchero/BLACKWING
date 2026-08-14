@@ -1,4 +1,5 @@
 use crate::lifecycle::{ConnectionState, Lifecycle};
+use bw_crypto::random::{OsRandom, SecureRandom};
 use bw_crypto::SymmetricKey;
 use bw_protocol::encryption::{EncryptionContext, KeyRotationPolicy, SessionKeys};
 use bw_protocol::frame::ProtocolFrame;
@@ -24,6 +25,8 @@ pub enum SecureConnError {
     LifecycleError,
     #[error("Handshake failed")]
     HandshakeFailed,
+    #[error("Failed to generate cryptographic nonce")]
+    NonceFailed,
 }
 
 pub struct SecureConnection {
@@ -60,8 +63,11 @@ impl SecureConnection {
             .transition(ConnectionState::Connected, ConnectionState::Handshaking)
             .map_err(|_| SecureConnError::LifecycleError)?;
 
-        // 1. Client generates nonce and sends HandshakeRequest (simplified for now)
-        let client_nonce = [1u8; 16]; // TODO: replace with OsRng
+        // 1. Client generates a fresh nonce and sends HandshakeRequest
+        let mut client_nonce = [0u8; 16];
+        let mut rng = OsRandom;
+        rng.fill(&mut client_nonce)
+            .map_err(|_| SecureConnError::NonceFailed)?;
 
         let req_frame = ProtocolFrame {
             header: PacketHeader {
@@ -120,8 +126,11 @@ impl SecureConnection {
         let mut client_nonce = [0u8; 16];
         client_nonce.copy_from_slice(req_frame.payload);
 
-        // 2. Server generates nonce and sends HandshakeResponse
-        let server_nonce = [2u8; 16]; // TODO: replace with OsRng
+        // 2. Server generates a fresh nonce and sends HandshakeResponse
+        let mut server_nonce = [0u8; 16];
+        let mut rng = OsRandom;
+        rng.fill(&mut server_nonce)
+            .map_err(|_| SecureConnError::NonceFailed)?;
 
         let resp_frame = ProtocolFrame {
             header: PacketHeader {
