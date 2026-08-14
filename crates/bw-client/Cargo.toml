@@ -1,0 +1,21 @@
+[package]
+name = "bw-client"
+version = "0.1.0"
+edition = "2024"
+description = "BLACKWING client — native viewer window with video rendering"
+
+[[bin]]
+name = "bw-client"
+path = "src/main.rs"
+
+[dependencies]
+bw-decoder = { version = "0.1.0", path = "../bw-decoder" }
+bw-protocol = { version = "0.1.0", path = "../bw-protocol" }
+# pixels 0.16 -> wgpu 27 -> windows 0.58. pixels 0.17 -> wgpu 29 -> windows 0.62,
+# which fails to compile on the D3D12 backend (wgpu-hal trait-bound errors).
+pixels = "0.16"
+tokio = { workspace = true }
+winit = "0.30"
+
+[lints]
+workspace = true
