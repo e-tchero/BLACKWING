@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! Tests for bw-relay registration and rendezvous.
 
 use bw_crypto::{DeviceId, SigningKey};

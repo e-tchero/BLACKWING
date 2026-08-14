@@ -1,3 +1,4 @@
+#![allow(clippy::field_reassign_with_default)]
 use bw_crypto::SymmetricKey;
 use bw_protocol::header::{PacketHeader, PROTOCOL_MAGIC};
 use bw_protocol::routing::SessionId;

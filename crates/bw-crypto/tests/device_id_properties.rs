@@ -256,7 +256,7 @@ proptest! {
         prop_assert_eq!(deserialized, id);
 
         // Verify JSON string-to-type parsing mirrors FromStr exactly
-        let json_from_raw_string = format!("\"{}\"", id.to_string());
+        let json_from_raw_string = format!("\"{}\"", id);
         let decoded_json: DeviceId = serde_json::from_str(&json_from_raw_string)
             .map_err(|e| TestCaseError::fail(format!("{e:?}")))?;
         prop_assert_eq!(decoded_json, id);

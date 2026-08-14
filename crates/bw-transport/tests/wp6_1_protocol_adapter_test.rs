@@ -1,3 +1,4 @@
+#![allow(clippy::field_reassign_with_default)]
 use bw_protocol::frame::ProtocolFrame;
 use bw_protocol::header::{PacketHeader, PROTOCOL_MAGIC};
 use bw_protocol::version::CURRENT_VERSION;

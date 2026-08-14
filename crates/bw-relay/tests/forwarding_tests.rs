@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! Phase 3 forwarding tests for bw-relay.
 //!
 //! Covers:
@@ -26,7 +27,7 @@ use std::sync::Arc;
 use bw_crypto::SigningKey;
 use bw_relay::{
     clock::MockClock,
-    forwarding::{ForwardingState, ForwardingTable, MAX_FORWARDING_PAYLOAD},
+    forwarding::{ForwardingState, ForwardingTable},
 };
 
 // ── helpers ──────────────────────────────────────────────────────────────────

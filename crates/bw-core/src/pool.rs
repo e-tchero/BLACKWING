@@ -167,6 +167,7 @@ impl<'a, const SLOT_SIZE: usize, const POOL_SIZE: usize> Drop
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used)]
     use super::*;
 
     #[test]
