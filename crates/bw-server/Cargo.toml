@@ -1,0 +1,18 @@
+[package]
+name = "bw-server"
+version = "0.1.0"
+edition = "2024"
+description = "BLACKWING server — receives remote input and injects it into the OS"
+
+[[bin]]
+name = "bw-server"
+path = "src/main.rs"
+
+[dependencies]
+bw-input = { version = "0.1.0", path = "../bw-input" }
+bw-protocol = { version = "0.1.0", path = "../bw-protocol" }
+# Declared for the upcoming QUIC session-accept path; not yet used by the bin.
+bw-session = { version = "0.1.0", path = "../bw-session" }
+
+[lints]
+workspace = true

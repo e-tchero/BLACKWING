@@ -24,6 +24,13 @@ pub enum DispatchError {
     /// No handler is registered for the envelope's message type.
     #[error("No handler registered for message type: {0:?}")]
     NoHandler(MessageType),
+    /// The registered handler reported a failure while processing the message.
+    ///
+    /// This is a protocol-generic carrier (e.g. an OS input-injection failure
+    /// in the server) — the payload is a human-readable description so the
+    /// protocol layer stays independent of specific handler implementations.
+    #[error("Message handler failed: {0}")]
+    Handler(String),
 }
 
 /// Coordinates the reception and routing of incoming message envelopes.

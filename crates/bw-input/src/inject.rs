@@ -24,6 +24,7 @@ pub trait InputBackend: Send + Sync {
 /// A handle for injecting OS-level input events.
 ///
 /// Wraps an [`InputBackend`]; the default backend targets Win32 `SendInput`.
+#[derive(Clone)]
 pub struct InputInjector {
     backend: Arc<dyn InputBackend>,
 }

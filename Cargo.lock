@@ -341,6 +341,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "bw-server"
+version = "0.1.0"
+dependencies = [
+ "bw-input",
+ "bw-protocol",
+ "bw-session",
+]
+
+[[package]]
 name = "bw-session"
 version = "0.1.0"
 dependencies = [
