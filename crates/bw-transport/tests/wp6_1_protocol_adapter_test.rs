@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(missing_docs)]
 #![allow(clippy::field_reassign_with_default)]
 use bw_protocol::frame::ProtocolFrame;
 use bw_protocol::header::{PacketHeader, PROTOCOL_MAGIC};

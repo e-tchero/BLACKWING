@@ -18,3 +18,18 @@ windows = { version = "0.61", features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_Graphics_Gdi",
 ] }
+
+# Mirrors the workspace lint policy (see root Cargo.toml) with one deliberate
+# override: `unsafe_code` is `allow` (not `forbid`) because the DXGI/WGC COM
+# interop in this crate inherently requires `unsafe`. Justification is
+# documented in src/lib.rs. Per-crate overrides cannot be merged with
+# `[lints] workspace = true`, so the full table is spelled out here.
+[lints.rust]
+unsafe_code = "allow"
+missing_docs = "deny"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+todo = "deny"
+dbg_macro = "deny"

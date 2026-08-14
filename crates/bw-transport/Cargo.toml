@@ -17,3 +17,6 @@ thiserror = "1.0"
 [dev-dependencies]
 bw-relay = { path = "../bw-relay" }
 bw-crypto = { path = "../bw-crypto", features = ["serde"] }
+
+[lints]
+workspace = true

@@ -1,3 +1,5 @@
+//! Secure connection layer: authenticated handshake and encrypted frames.
+
 use crate::lifecycle::{ConnectionState, Lifecycle};
 use bw_crypto::random::{OsRandom, SecureRandom};
 use bw_crypto::SymmetricKey;
@@ -15,20 +17,27 @@ use thiserror::Error;
 const PACKET_TYPE_HANDSHAKE: u16 = 0x01;
 const PACKET_TYPE_MESSAGE: u16 = 0x02;
 
+/// Errors that can occur during secure connection setup or use.
 #[derive(Debug, Error)]
 pub enum SecureConnError {
+    /// The underlying transport adapter reported an error.
     #[error("Adapter error: {0}")]
     Adapter(#[from] AdapterError),
+    /// The protocol layer reported an error.
     #[error("Protocol error: {0}")]
     Protocol(#[from] bw_protocol::error::ProtocolError),
+    /// The lifecycle state machine rejected a transition.
     #[error("Invalid lifecycle transition")]
     LifecycleError,
+    /// The handshake exchange did not complete successfully.
     #[error("Handshake failed")]
     HandshakeFailed,
+    /// Failed to generate a cryptographic nonce.
     #[error("Failed to generate cryptographic nonce")]
     NonceFailed,
 }
 
+/// A secure, encrypted session built on a QUIC protocol adapter.
 pub struct SecureConnection {
     adapter: QuicProtocolAdapter,
     session_id: SessionId,
@@ -37,6 +46,7 @@ pub struct SecureConnection {
 }
 
 impl SecureConnection {
+    /// Creates a new secure connection around the given adapter and session.
     pub fn new(
         adapter: QuicProtocolAdapter,
         session_manager: Arc<SessionManager>,
@@ -50,6 +60,7 @@ impl SecureConnection {
         }
     }
 
+    /// Returns the current connection lifecycle state.
     pub fn state(&self) -> ConnectionState {
         self.lifecycle.get_state()
     }
@@ -181,14 +192,10 @@ impl SecureConnection {
             return Err(SecureConnError::LifecycleError);
         }
 
-        let mut encrypted_frame = None;
-
-        self.session_manager
-            .with_session_context(&self.session_id, |ctx| {
-                encrypted_frame = Some(ctx.encrypt_frame(&frame).expect("Encryption failed"));
-            })?;
-
-        let cbor_bytes = encrypted_frame.unwrap().serialize()?;
+        let encrypted_frame = self
+            .session_manager
+            .with_session_context(&self.session_id, |ctx| ctx.encrypt_frame(&frame))??;
+        let cbor_bytes = encrypted_frame.serialize()?;
 
         let secure_frame = ProtocolFrame {
             header: PacketHeader {
@@ -219,18 +226,13 @@ impl SecureConnection {
         let encrypted_frame =
             bw_protocol::encryption::EncryptedFrame::deserialize(secure_frame.payload)?;
 
-        let mut decrypted_frame = None;
-        self.session_manager
-            .with_session_context(&self.session_id, |ctx| {
-                decrypted_frame = Some(
-                    ctx.decrypt_frame(&encrypted_frame)
-                        .expect("Decryption failed"),
-                );
-            })?;
-
-        Ok(decrypted_frame.unwrap())
+        let decrypted_frame = self
+            .session_manager
+            .with_session_context(&self.session_id, |ctx| ctx.decrypt_frame(&encrypted_frame))??;
+        Ok(decrypted_frame)
     }
 
+    /// Closes the secure connection, releasing the session.
     pub async fn close(&mut self) {
         self.lifecycle.force_state(ConnectionState::Closing);
         let _ = self.session_manager.close_session(&self.session_id);

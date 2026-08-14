@@ -11,6 +11,11 @@ use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::Win32::Graphics::Dxgi::*;
 
+/// DXGI desktop-duplication capture backend (Windows only).
+///
+/// Uses `IDXGIOutputDuplication` to acquire frames with dirty-rectangle
+/// tracking. All COM/DirectX calls are `unsafe` by API design; this is
+/// confined to the Windows backends and reviewed on a per-call basis.
 pub struct DxgiCaptureBackend {
     device: Option<ID3D11Device>,
     context: Option<ID3D11DeviceContext>,
@@ -22,6 +27,7 @@ pub struct DxgiCaptureBackend {
 }
 
 impl DxgiCaptureBackend {
+    /// Creates a new, uninitialized DXGI capture backend.
     pub fn new() -> Result<Self, CaptureError> {
         Ok(Self {
             device: None,
@@ -196,7 +202,7 @@ impl CaptureBackend for DxgiCaptureBackend {
         self.height = display.height;
         self.active_display = Some(display.clone());
         self.staging_texture = Some(Self::create_staging_texture(
-            self.device.as_ref().unwrap(),
+            &device,
             display.width,
             display.height,
         )?);
@@ -206,8 +212,8 @@ impl CaptureBackend for DxgiCaptureBackend {
 
     fn next_frame(&mut self) -> Result<Frame, CaptureError> {
         let duplication = self.duplication.as_ref().ok_or(CaptureError::Stopped)?;
-        let context = self.context.as_ref().unwrap();
-        let staging_texture = self.staging_texture.as_ref().unwrap();
+        let context = self.context.as_ref().ok_or(CaptureError::Stopped)?;
+        let staging_texture = self.staging_texture.as_ref().ok_or(CaptureError::Stopped)?;
 
         let mut frame_info = DXGI_OUTDUPL_FRAME_INFO::default();
         let mut resource: Option<IDXGIResource> = None;
@@ -243,7 +249,9 @@ impl CaptureBackend for DxgiCaptureBackend {
                 }
             }
 
-            let resource = resource.unwrap();
+            let resource = resource.ok_or_else(|| {
+                CaptureError::FrameAcquisitionFailed("AcquireNextFrame returned no resource".into())
+            })?;
             let texture: ID3D11Texture2D = resource.cast().map_err(|e| {
                 CaptureError::FrameAcquisitionFailed(format!("Texture cast: {}", e))
             })?;

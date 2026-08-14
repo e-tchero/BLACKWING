@@ -9,6 +9,7 @@ pub struct WgcCaptureBackend {
 }
 
 impl WgcCaptureBackend {
+    /// Creates a new, uninitialized WGC capture backend.
     pub fn new() -> Result<Self, CaptureError> {
         Ok(Self { active: false })
     }

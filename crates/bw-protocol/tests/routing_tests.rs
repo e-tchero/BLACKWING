@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(missing_docs)]
 use bw_crypto::{DeviceId, SymmetricKey};
 use bw_protocol::encryption::{EncryptionContext, KeyRotationPolicy, SessionKeys};
 use bw_protocol::error::ProtocolError;

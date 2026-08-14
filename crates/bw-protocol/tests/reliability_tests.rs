@@ -1,3 +1,5 @@
+#![allow(missing_docs)] // Integration-test crate (repo convention)
+#![allow(clippy::unwrap_used, clippy::expect_used)] // Test code may panic on failure (repo convention)
 use bw_protocol::error::ProtocolError;
 use bw_protocol::reliability::{
     AckFrame, DuplicateFilter, ReliableFrame, ReliableReceiver, ReliableSender, SequenceNumber,

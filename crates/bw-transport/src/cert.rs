@@ -2,16 +2,22 @@ use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use std::sync::Arc;
 use thiserror::Error;
 
+/// Errors produced while generating or configuring TLS certificates.
 #[derive(Debug, Error)]
 pub enum CertError {
+    /// Certificate generation failed (rcgen error).
     #[error("Failed to generate certificate: {0}")]
     Rcgen(#[from] rcgen::Error),
+    /// The generated key could not be parsed into a rustls key.
     #[error("Failed to parse private key")]
     KeyParseError,
 }
 
+/// A self-signed X.509 certificate and its private key.
 pub struct SelfSignedCert {
+    /// DER-encoded certificate.
     pub cert: CertificateDer<'static>,
+    /// Private key material in PKCS#8 form.
     pub key: PrivateKeyDer<'static>,
 }
 
