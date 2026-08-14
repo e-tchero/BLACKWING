@@ -1,7 +1,7 @@
 #![allow(missing_docs)] // Integration-test crate (repo convention)
 #![allow(clippy::unwrap_used, clippy::expect_used)] // Test code may panic on failure (repo convention)
 use bw_protocol::error::ProtocolError;
-use bw_protocol::message::{MessageType, ProtocolMessage};
+use bw_protocol::message::{KeyboardEvent, MessageType, MouseEvent, ProtocolMessage};
 
 #[test]
 fn test_message_types_serialization_roundtrip() {
@@ -14,6 +14,8 @@ fn test_message_types_serialization_roundtrip() {
         MessageType::Data,
         MessageType::Control,
         MessageType::Error,
+        MessageType::InputKeyboard,
+        MessageType::InputMouse,
     ];
 
     for &msg_type in &types {
@@ -101,4 +103,86 @@ fn test_unknown_message_type() {
 
     let result = ProtocolMessage::deserialize(&serialized_invalid_type);
     assert_eq!(result.err(), Some(ProtocolError::DeserializationError));
+}
+
+#[test]
+fn test_input_message_constructors_and_accessors() {
+    let kb = ProtocolMessage::keyboard_event(0x1b, false).unwrap(); // VK_ESCAPE up
+    assert_eq!(kb.message_type, MessageType::InputKeyboard);
+    assert!(kb.validate().is_ok());
+    assert_eq!(
+        kb.as_keyboard_event(),
+        Some(KeyboardEvent {
+            keycode: 0x1b,
+            is_down: false
+        })
+    );
+    // Wrong accessor for the message type returns None.
+    assert!(kb.as_mouse_event().is_none());
+
+    let ms = ProtocolMessage::mouse_event(120, -30, 0b101).unwrap();
+    assert_eq!(ms.message_type, MessageType::InputMouse);
+    assert!(ms.validate().is_ok());
+    assert_eq!(
+        ms.as_mouse_event(),
+        Some(MouseEvent {
+            dx: 120,
+            dy: -30,
+            buttons_mask: 0b101
+        })
+    );
+    assert!(ms.as_keyboard_event().is_none());
+}
+
+#[test]
+fn test_input_message_wire_roundtrip() {
+    let kb = ProtocolMessage::keyboard_event(0x41, true).unwrap();
+    let encoded = kb.serialize().unwrap();
+    let decoded = ProtocolMessage::deserialize(&encoded).unwrap();
+    assert_eq!(decoded.message_type, MessageType::InputKeyboard);
+    assert_eq!(
+        decoded.as_keyboard_event(),
+        Some(KeyboardEvent {
+            keycode: 0x41,
+            is_down: true
+        })
+    );
+
+    let ms = ProtocolMessage::mouse_event(0, 10, 0b010).unwrap();
+    let encoded = ms.serialize().unwrap();
+    let decoded = ProtocolMessage::deserialize(&encoded).unwrap();
+    assert_eq!(decoded.message_type, MessageType::InputMouse);
+    assert_eq!(
+        decoded.as_mouse_event(),
+        Some(MouseEvent {
+            dx: 0,
+            dy: 10,
+            buttons_mask: 0b010
+        })
+    );
+}
+
+#[test]
+fn test_input_message_requires_payload() {
+    let invalid = ProtocolMessage {
+        message_type: MessageType::InputKeyboard,
+        message_id: 1,
+        flags: 0,
+        payload: vec![],
+    };
+    assert_eq!(
+        invalid.validate().err(),
+        Some(ProtocolError::InvalidPayloadLength)
+    );
+
+    let invalid_mouse = ProtocolMessage {
+        message_type: MessageType::InputMouse,
+        message_id: 1,
+        flags: 0,
+        payload: vec![],
+    };
+    assert_eq!(
+        invalid_mouse.validate().err(),
+        Some(ProtocolError::InvalidPayloadLength)
+    );
 }
