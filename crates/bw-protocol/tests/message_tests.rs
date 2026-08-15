@@ -1,7 +1,9 @@
 #![allow(missing_docs)] // Integration-test crate (repo convention)
 #![allow(clippy::unwrap_used, clippy::expect_used)] // Test code may panic on failure (repo convention)
 use bw_protocol::error::ProtocolError;
-use bw_protocol::message::{KeyboardEvent, MessageType, MouseEvent, ProtocolMessage};
+use bw_protocol::message::{
+    ClipboardEvent, ClipboardFormat, KeyboardEvent, MessageType, MouseEvent, ProtocolMessage,
+};
 
 #[test]
 fn test_message_types_serialization_roundtrip() {
@@ -16,6 +18,7 @@ fn test_message_types_serialization_roundtrip() {
         MessageType::Error,
         MessageType::InputKeyboard,
         MessageType::InputMouse,
+        MessageType::ClipboardData,
     ];
 
     for &msg_type in &types {
@@ -183,6 +186,67 @@ fn test_input_message_requires_payload() {
     };
     assert_eq!(
         invalid_mouse.validate().err(),
+        Some(ProtocolError::InvalidPayloadLength)
+    );
+}
+
+#[test]
+fn test_clipboard_event_text_roundtrip() {
+    let event = ClipboardEvent {
+        format: ClipboardFormat::Text,
+        data: b"clipboard text payload".to_vec(),
+    };
+    let msg = ProtocolMessage::clipboard_event(event.clone()).unwrap();
+
+    assert_eq!(msg.message_type, MessageType::ClipboardData);
+    assert!(msg.validate().is_ok());
+    assert_eq!(msg.as_clipboard_event(), Some(event));
+
+    // Wrong accessor for the message type returns None.
+    assert!(msg.as_keyboard_event().is_none());
+
+    // Wire round-trip preserves format and data.
+    let encoded = msg.serialize().unwrap();
+    let decoded = ProtocolMessage::deserialize(&encoded).unwrap();
+    assert_eq!(decoded.message_type, MessageType::ClipboardData);
+    assert_eq!(
+        decoded.as_clipboard_event(),
+        Some(ClipboardEvent {
+            format: ClipboardFormat::Text,
+            data: b"clipboard text payload".to_vec(),
+        })
+    );
+}
+
+#[test]
+fn test_clipboard_event_image_roundtrip() {
+    let rgba = vec![0u8; 8 * 6 * 4]; // 8x6 RGBA8 image
+    let event = ClipboardEvent {
+        format: ClipboardFormat::ImageRgba8 {
+            width: 8,
+            height: 6,
+        },
+        data: rgba,
+    };
+    let msg = ProtocolMessage::clipboard_event(event.clone()).unwrap();
+
+    assert_eq!(msg.as_clipboard_event(), Some(event.clone()));
+
+    let encoded = msg.serialize().unwrap();
+    let decoded = ProtocolMessage::deserialize(&encoded).unwrap();
+    assert_eq!(decoded.as_clipboard_event(), Some(event));
+}
+
+#[test]
+fn test_clipboard_event_requires_payload() {
+    let invalid = ProtocolMessage {
+        message_type: MessageType::ClipboardData,
+        message_id: 1,
+        flags: 0,
+        payload: vec![],
+    };
+    assert_eq!(
+        invalid.validate().err(),
         Some(ProtocolError::InvalidPayloadLength)
     );
 }

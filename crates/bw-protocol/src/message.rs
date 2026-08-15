@@ -27,6 +27,8 @@ pub enum MessageType {
     InputKeyboard = 8,
     /// Remote mouse input event (movement and/or button state).
     InputMouse = 9,
+    /// Remote clipboard content (text or image).
+    ClipboardData = 10,
 }
 
 /// A remote keyboard event (key press or release).
@@ -54,6 +56,34 @@ pub struct MouseEvent {
     /// Bitmask of mouse button states: bit 0 = left, bit 1 = right,
     /// bit 2 = middle. `0` means no buttons pressed.
     pub buttons_mask: u8,
+}
+
+/// The format of a clipboard payload.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub enum ClipboardFormat {
+    /// Plain-text clipboard content (UTF-8 bytes).
+    Text,
+    /// RGBA8 image with explicit pixel dimensions.
+    ImageRgba8 {
+        /// Image width in pixels.
+        width: usize,
+        /// Image height in pixels.
+        height: usize,
+    },
+}
+
+/// A remote clipboard change (text or image).
+///
+/// Carried in the payload of a [`ProtocolMessage`] with
+/// [`MessageType::ClipboardData`]. `data` holds raw UTF-8 string bytes for
+/// [`ClipboardFormat::Text`] or tightly-packed RGBA8 pixels for
+/// [`ClipboardFormat::ImageRgba8`].
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ClipboardEvent {
+    /// The format and (for images) dimensions of the payload.
+    pub format: ClipboardFormat,
+    /// Raw string bytes or RGBA pixels.
+    pub data: Vec<u8>,
 }
 
 /// A structured protocol message with metadata and an owned payload.
@@ -161,6 +191,37 @@ impl ProtocolMessage {
         ciborium::de::from_reader(&self.payload[..]).ok()
     }
 
+    /// Builds a [`MessageType::ClipboardData`] message carrying a
+    /// [`ClipboardEvent`].
+    ///
+    /// # Returns
+    ///
+    /// The constructed message, or `ProtocolError` if the event cannot be
+    /// serialized into the payload.
+    pub fn clipboard_event(event: ClipboardEvent) -> Result<Self, ProtocolError> {
+        let mut payload = Vec::new();
+        ciborium::ser::into_writer(&event, &mut payload)
+            .map_err(|_| ProtocolError::SerializationError)?;
+        Ok(Self {
+            message_type: MessageType::ClipboardData,
+            message_id: 0,
+            flags: 0,
+            payload,
+        })
+    }
+
+    /// Returns the decoded [`ClipboardEvent`] if this message is a clipboard
+    /// message.
+    ///
+    /// Returns `None` when the message type is not
+    /// [`MessageType::ClipboardData`] or the payload cannot be decoded.
+    pub fn as_clipboard_event(&self) -> Option<ClipboardEvent> {
+        if self.message_type != MessageType::ClipboardData {
+            return None;
+        }
+        ciborium::de::from_reader(&self.payload[..]).ok()
+    }
+
     /// Validates protocol constraints on the message fields.
     pub fn validate(&self) -> Result<(), ProtocolError> {
         // Data messages must not have empty payload if flags indicate data presence
@@ -168,10 +229,10 @@ impl ProtocolMessage {
             return Err(ProtocolError::InvalidPayloadLength);
         }
 
-        // Input messages must carry a serialized event payload.
+        // Input and clipboard messages must carry a serialized event payload.
         if matches!(
             self.message_type,
-            MessageType::InputKeyboard | MessageType::InputMouse
+            MessageType::InputKeyboard | MessageType::InputMouse | MessageType::ClipboardData
         ) && self.payload.is_empty()
         {
             return Err(ProtocolError::InvalidPayloadLength);
