@@ -344,6 +344,7 @@ dependencies = [
 name = "bw-server"
 version = "0.1.0"
 dependencies = [
+ "bw-crypto",
  "bw-input",
  "bw-protocol",
  "bw-session",

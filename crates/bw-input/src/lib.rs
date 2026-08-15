@@ -36,5 +36,6 @@ pub mod input;
 pub use error::InputError;
 pub use inject::{
     inject_keyboard, inject_mouse_click, inject_mouse_move, InputBackend, InputInjector,
+    RecordingBackend,
 };
 pub use input::{InjectedInput, MouseButton};

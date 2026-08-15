@@ -6,7 +6,7 @@
 //! decouples the OS call from the injection logic so tests can substitute a
 //! recording backend.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use crate::error::InputError;
 use crate::input::{InjectedInput, MouseButton};
@@ -89,6 +89,36 @@ struct UnsupportedBackend;
 impl InputBackend for UnsupportedBackend {
     fn send(&self, _input: &InjectedInput) -> Result<(), InputError> {
         Err(InputError::UnsupportedPlatform)
+    }
+}
+
+/// A backend that records delivered events instead of injecting them into the
+/// OS.
+///
+/// Intended for tests and simulations: captures every [`InjectedInput`] so the
+/// injection logic can be verified without touching the OS input stack.
+#[derive(Default)]
+pub struct RecordingBackend {
+    events: Mutex<Vec<InjectedInput>>,
+}
+
+impl RecordingBackend {
+    /// Returns a copy of all events delivered so far.
+    pub fn events(&self) -> Vec<InjectedInput> {
+        self.events
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+}
+
+impl InputBackend for RecordingBackend {
+    fn send(&self, input: &InjectedInput) -> Result<(), InputError> {
+        self.events
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(*input);
+        Ok(())
     }
 }
 

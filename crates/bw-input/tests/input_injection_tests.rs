@@ -5,27 +5,8 @@ use bw_input::inject::{
     inject_keyboard, inject_mouse_click, inject_mouse_move, InputBackend, InputInjector,
 };
 use bw_input::input::{InjectedInput, MouseButton};
-use bw_input::InputError;
-use std::sync::{Arc, Mutex};
-
-/// A backend that records every delivered event instead of touching the OS.
-#[derive(Default)]
-struct RecordingBackend {
-    events: Mutex<Vec<InjectedInput>>,
-}
-
-impl RecordingBackend {
-    fn events(&self) -> Vec<InjectedInput> {
-        self.events.lock().unwrap().clone()
-    }
-}
-
-impl InputBackend for RecordingBackend {
-    fn send(&self, input: &InjectedInput) -> Result<(), InputError> {
-        self.events.lock().unwrap().push(*input);
-        Ok(())
-    }
-}
+use bw_input::{InputError, RecordingBackend};
+use std::sync::Arc;
 
 /// A backend that always fails, to verify error propagation.
 struct FailingBackend;
