@@ -29,6 +29,8 @@ pub enum MessageType {
     InputMouse = 9,
     /// Remote clipboard content (text or image).
     ClipboardData = 10,
+    /// Encoded audio packet (Opus).
+    AudioData = 11,
 }
 
 /// A remote keyboard event (key press or release).
@@ -84,6 +86,22 @@ pub struct ClipboardEvent {
     pub format: ClipboardFormat,
     /// Raw string bytes or RGBA pixels.
     pub data: Vec<u8>,
+}
+
+/// An encoded audio packet.
+///
+/// Carried in the payload of a [`ProtocolMessage`] with
+/// [`MessageType::AudioData`]. `opus_data` holds a single Opus-encoded frame
+/// (typically 20 ms of audio); the format metadata (channels, sample rate)
+/// lets the receiver configure its decoder.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct AudioPayload {
+    /// Number of interleaved PCM channels the frame was encoded from.
+    pub channels: u16,
+    /// Sample rate in Hz the frame was encoded at.
+    pub sample_rate: u32,
+    /// One Opus-encoded audio frame.
+    pub opus_data: Vec<u8>,
 }
 
 /// A structured protocol message with metadata and an owned payload.
@@ -222,6 +240,36 @@ impl ProtocolMessage {
         ciborium::de::from_reader(&self.payload[..]).ok()
     }
 
+    /// Builds a [`MessageType::AudioData`] message carrying an [`AudioPayload`].
+    ///
+    /// # Returns
+    ///
+    /// The constructed message, or `ProtocolError` if the payload cannot be
+    /// serialized.
+    pub fn audio_data(payload: AudioPayload) -> Result<Self, ProtocolError> {
+        let mut payload_bytes = Vec::new();
+        ciborium::ser::into_writer(&payload, &mut payload_bytes)
+            .map_err(|_| ProtocolError::SerializationError)?;
+        Ok(Self {
+            message_type: MessageType::AudioData,
+            message_id: 0,
+            flags: 0,
+            payload: payload_bytes,
+        })
+    }
+
+    /// Returns the decoded [`AudioPayload`] if this message is an audio
+    /// message.
+    ///
+    /// Returns `None` when the message type is not [`MessageType::AudioData`]
+    /// or the payload cannot be decoded.
+    pub fn as_audio_data(&self) -> Option<AudioPayload> {
+        if self.message_type != MessageType::AudioData {
+            return None;
+        }
+        ciborium::de::from_reader(&self.payload[..]).ok()
+    }
+
     /// Validates protocol constraints on the message fields.
     pub fn validate(&self) -> Result<(), ProtocolError> {
         // Data messages must not have empty payload if flags indicate data presence
@@ -229,10 +277,13 @@ impl ProtocolMessage {
             return Err(ProtocolError::InvalidPayloadLength);
         }
 
-        // Input and clipboard messages must carry a serialized event payload.
+        // Input, clipboard and audio messages must carry a serialized payload.
         if matches!(
             self.message_type,
-            MessageType::InputKeyboard | MessageType::InputMouse | MessageType::ClipboardData
+            MessageType::InputKeyboard
+                | MessageType::InputMouse
+                | MessageType::ClipboardData
+                | MessageType::AudioData
         ) && self.payload.is_empty()
         {
             return Err(ProtocolError::InvalidPayloadLength);

@@ -2,7 +2,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)] // Test code may panic on failure (repo convention)
 use bw_protocol::error::ProtocolError;
 use bw_protocol::message::{
-    ClipboardEvent, ClipboardFormat, KeyboardEvent, MessageType, MouseEvent, ProtocolMessage,
+    AudioPayload, ClipboardEvent, ClipboardFormat, KeyboardEvent, MessageType, MouseEvent,
+    ProtocolMessage,
 };
 
 #[test]
@@ -19,6 +20,7 @@ fn test_message_types_serialization_roundtrip() {
         MessageType::InputKeyboard,
         MessageType::InputMouse,
         MessageType::ClipboardData,
+        MessageType::AudioData,
     ];
 
     for &msg_type in &types {
@@ -241,6 +243,50 @@ fn test_clipboard_event_image_roundtrip() {
 fn test_clipboard_event_requires_payload() {
     let invalid = ProtocolMessage {
         message_type: MessageType::ClipboardData,
+        message_id: 1,
+        flags: 0,
+        payload: vec![],
+    };
+    assert_eq!(
+        invalid.validate().err(),
+        Some(ProtocolError::InvalidPayloadLength)
+    );
+}
+
+#[test]
+fn test_audio_data_roundtrip() {
+    let payload = AudioPayload {
+        channels: 2,
+        sample_rate: 48_000,
+        opus_data: vec![0xde, 0xad, 0xbe, 0xef],
+    };
+    let msg = ProtocolMessage::audio_data(payload.clone()).unwrap();
+
+    assert_eq!(msg.message_type, MessageType::AudioData);
+    assert!(msg.validate().is_ok());
+    assert_eq!(msg.as_audio_data(), Some(payload.clone()));
+
+    // Wrong accessor for the message type returns None.
+    assert!(msg.as_clipboard_event().is_none());
+
+    // Wire round-trip preserves channels, sample rate and opus data.
+    let encoded = msg.serialize().unwrap();
+    let decoded = ProtocolMessage::deserialize(&encoded).unwrap();
+    assert_eq!(decoded.message_type, MessageType::AudioData);
+    assert_eq!(
+        decoded.as_audio_data(),
+        Some(AudioPayload {
+            channels: 2,
+            sample_rate: 48_000,
+            opus_data: vec![0xde, 0xad, 0xbe, 0xef],
+        })
+    );
+}
+
+#[test]
+fn test_audio_data_requires_payload() {
+    let invalid = ProtocolMessage {
+        message_type: MessageType::AudioData,
         message_id: 1,
         flags: 0,
         payload: vec![],
