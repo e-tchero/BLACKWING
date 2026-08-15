@@ -1,0 +1,15 @@
+[package]
+name = "bw-audio"
+version = "0.1.0"
+edition = "2024"
+description = "BLACKWING audio streaming — Opus encode/decode plus cpal-based capture and playback"
+
+[dependencies]
+cpal = "0.18"
+# Pure-Rust Opus codec (no C toolchain required). The C-binding `opus` crate
+# needs cmake/pkg-config which is not available in this build environment.
+rusty-opus = "0.9"
+thiserror = "2"
+
+[lints]
+workspace = true
