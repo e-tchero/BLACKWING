@@ -14,6 +14,7 @@
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
+use bw_audio::{AudioCodecConfig, AudioPlayback};
 use bw_clipboard::{ClipboardImage, ClipboardManager};
 use bw_crypto::DeviceId;
 use bw_decoder::DecodedImage;
@@ -73,6 +74,14 @@ impl App {
             Ok(manager) => register_clipboard_handler(&dispatcher, Arc::new(Mutex::new(manager))),
             Err(e) => {
                 eprintln!("warning: clipboard unavailable — remote clipboard sync disabled: {e}");
+            }
+        }
+        let audio_config =
+            AudioCodecConfig::new(48_000, 2).expect("48 kHz stereo is a valid config");
+        match AudioPlayback::new(audio_config) {
+            Ok(playback) => register_audio_handler(&dispatcher, Arc::new(Mutex::new(playback))),
+            Err(e) => {
+                eprintln!("warning: audio playback unavailable — remote audio disabled: {e}");
             }
         }
         Self {
@@ -261,6 +270,29 @@ fn register_clipboard_handler(
     );
 }
 
+/// Registers the audio handler on the client's dispatcher.
+///
+/// Inbound [`MessageType::AudioData`] messages are decoded into an
+/// [`AudioPayload`] and fed to the shared [`AudioPlayback`] (the server's
+/// captured host audio, played on the client's output device).
+fn register_audio_handler(dispatcher: &MessageDispatcher, playback: Arc<Mutex<AudioPlayback>>) {
+    dispatcher.register_handler(
+        MessageType::AudioData,
+        Arc::new(move |envelope: MessageEnvelope| {
+            let payload = envelope
+                .message
+                .as_audio_data()
+                .ok_or_else(|| DispatchError::Handler("undecodable audio payload".into()))?;
+            let playback = playback
+                .lock()
+                .map_err(|e| DispatchError::Handler(format!("audio lock poisoned: {e}")))?;
+            playback
+                .feed(payload.channels, payload.sample_rate, &payload.opus_data)
+                .map_err(|e| DispatchError::Handler(format!("audio decode failed: {e}")))
+        }),
+    );
+}
+
 /// Routes an inbound protocol message through the client's dispatcher.
 ///
 /// This is the entry point the QUIC network receiver will call when a server
@@ -355,6 +387,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bw_audio::AudioEncoder;
+    use bw_protocol::message::AudioPayload;
     use std::sync::{Mutex, OnceLock};
 
     /// Serializes access to the global OS clipboard across tests in this
@@ -409,6 +443,66 @@ mod tests {
 
         let message = ProtocolMessage {
             message_type: MessageType::ClipboardData,
+            message_id: 0,
+            flags: 0,
+            payload: vec![0xde, 0xad, 0xbe, 0xef],
+        };
+        let err = handle_incoming_message(&dispatcher, message).unwrap_err();
+        assert!(matches!(err, DispatchError::Handler(_)));
+    }
+
+    #[test]
+    fn test_audio_handler_feeds_playback() {
+        let config = AudioCodecConfig::new(48_000, 2).expect("48 kHz stereo is a valid config");
+        let Ok(playback) = AudioPlayback::new(config.clone()) else {
+            eprintln!("skipping audio test: no output device");
+            return;
+        };
+        let playback = Arc::new(Mutex::new(playback));
+        let dispatcher = MessageDispatcher::new();
+        register_audio_handler(&dispatcher, playback);
+
+        // Encode a silent stereo frame and route it through the dispatcher.
+        let mut encoder = AudioEncoder::new(config.clone()).expect("encoder builds");
+        let frame = vec![0.0f32; config.frame_size * 2];
+        let packet = encoder.encode_frame(&frame).expect("frame encodes");
+        let message = ProtocolMessage::audio_data(AudioPayload {
+            channels: config.channels,
+            sample_rate: config.sample_rate,
+            opus_data: packet,
+        })
+        .expect("audio message builds");
+        handle_incoming_message(&dispatcher, message).expect("audio message handled");
+
+        // A second packet with a different format exercises decoder recreation.
+        let config_mono = AudioCodecConfig::new(16_000, 1).expect("16 kHz mono is a valid config");
+        let mut encoder_mono = AudioEncoder::new(config_mono.clone()).expect("encoder builds");
+        let frame_mono = vec![0.0f32; config_mono.frame_size];
+        let packet_mono = encoder_mono
+            .encode_frame(&frame_mono)
+            .expect("frame encodes");
+        let message_mono = ProtocolMessage::audio_data(AudioPayload {
+            channels: config_mono.channels,
+            sample_rate: config_mono.sample_rate,
+            opus_data: packet_mono,
+        })
+        .expect("audio message builds");
+        handle_incoming_message(&dispatcher, message_mono).expect("format-switch handled");
+    }
+
+    #[test]
+    fn test_audio_handler_rejects_undecodable_payload() {
+        let config = AudioCodecConfig::new(48_000, 2).expect("48 kHz stereo is a valid config");
+        let Ok(playback) = AudioPlayback::new(config.clone()) else {
+            eprintln!("skipping audio test: no output device");
+            return;
+        };
+        let playback = Arc::new(Mutex::new(playback));
+        let dispatcher = MessageDispatcher::new();
+        register_audio_handler(&dispatcher, playback);
+
+        let message = ProtocolMessage {
+            message_type: MessageType::AudioData,
             message_id: 0,
             flags: 0,
             payload: vec![0xde, 0xad, 0xbe, 0xef],

@@ -300,6 +300,7 @@ dependencies = [
 name = "bw-client"
 version = "0.1.0"
 dependencies = [
+ "bw-audio",
  "bw-clipboard",
  "bw-crypto",
  "bw-decoder",

@@ -9,6 +9,7 @@ name = "bw-client"
 path = "src/main.rs"
 
 [dependencies]
+bw-audio = { version = "0.1.0", path = "../bw-audio" }
 bw-clipboard = { version = "0.1.0", path = "../bw-clipboard" }
 bw-crypto = { version = "0.1.0", path = "../bw-crypto" }
 bw-decoder = { version = "0.1.0", path = "../bw-decoder" }
