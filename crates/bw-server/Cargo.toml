@@ -13,6 +13,7 @@ name = "bw-server"
 path = "src/main.rs"
 
 [dependencies]
+bw-clipboard = { version = "0.1.0", path = "../bw-clipboard" }
 bw-input = { version = "0.1.0", path = "../bw-input" }
 bw-protocol = { version = "0.1.0", path = "../bw-protocol" }
 # Declared for the upcoming QUIC session-accept path; not yet used.

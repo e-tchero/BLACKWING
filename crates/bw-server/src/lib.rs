@@ -4,11 +4,14 @@
 //! the `bw-server` binary uses at startup and that the E2E integration test
 //! (TASK-107) exercises against a recording injection backend.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
+use bw_clipboard::{ClipboardImage, ClipboardManager};
 use bw_input::{InputInjector, MouseButton};
 use bw_protocol::dispatcher::{DispatchError, MessageDispatcher};
-use bw_protocol::message::{KeyboardEvent, MessageType, MouseEvent};
+use bw_protocol::message::{
+    ClipboardEvent, ClipboardFormat, KeyboardEvent, MessageType, MouseEvent,
+};
 use bw_protocol::routing::MessageEnvelope;
 
 /// Button-mask bits for the three standard mouse buttons.
@@ -76,4 +79,57 @@ fn parse_mouse(envelope: &MessageEnvelope) -> Result<MouseEvent, DispatchError> 
         .message
         .as_mouse_event()
         .ok_or_else(|| DispatchError::Handler("undecodable mouse event payload".into()))
+}
+
+/// Applies a decoded [`ClipboardEvent`] to the local OS clipboard.
+///
+/// Text events are written via [`ClipboardManager::set_text`]; image events
+/// are validated and written via [`ClipboardManager::set_image`]. Failures are
+/// reported as [`DispatchError::Handler`] so they propagate out of the
+/// dispatcher without panicking.
+pub fn apply_clipboard_event(
+    manager: &mut ClipboardManager,
+    event: &ClipboardEvent,
+) -> Result<(), DispatchError> {
+    match &event.format {
+        ClipboardFormat::Text => {
+            let text = std::str::from_utf8(&event.data)
+                .map_err(|e| DispatchError::Handler(format!("invalid clipboard UTF-8: {e}")))?;
+            manager
+                .set_text(text)
+                .map_err(|e| DispatchError::Handler(format!("clipboard write failed: {e}")))?;
+        }
+        ClipboardFormat::ImageRgba8 { width, height } => {
+            let image = ClipboardImage::new(*width, *height, event.data.clone())
+                .map_err(|e| DispatchError::Handler(format!("invalid clipboard image: {e}")))?;
+            manager
+                .set_image(&image)
+                .map_err(|e| DispatchError::Handler(format!("clipboard write failed: {e}")))?;
+        }
+    }
+    Ok(())
+}
+
+/// Registers the clipboard handler on the dispatcher.
+///
+/// The handler decodes the `ClipboardData` payload into a [`ClipboardEvent`]
+/// and applies it to the shared [`ClipboardManager`]. The manager is shared
+/// behind a mutex because `arboard` requires `&mut` for every operation and
+/// the clipboard may only be opened by one thread at a time.
+pub fn register_clipboard_handler(
+    dispatcher: &MessageDispatcher,
+    clipboard: Arc<Mutex<ClipboardManager>>,
+) {
+    dispatcher.register_handler(
+        MessageType::ClipboardData,
+        Arc::new(move |envelope: MessageEnvelope| {
+            let event = envelope.message.as_clipboard_event().ok_or_else(|| {
+                DispatchError::Handler("undecodable clipboard event payload".into())
+            })?;
+            let mut manager = clipboard
+                .lock()
+                .map_err(|e| DispatchError::Handler(format!("clipboard lock poisoned: {e}")))?;
+            apply_clipboard_event(&mut manager, &event)
+        }),
+    );
 }
