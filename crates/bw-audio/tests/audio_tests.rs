@@ -103,18 +103,20 @@ fn test_decode_handles_bad_and_lost_packets() {
     assert_eq!(plc.len(), config.frame_size);
 }
 
-/// Config validation: zero sample rate and out-of-range channels rejected,
-/// and the 20 ms frame size is derived correctly at other rates.
+/// Config validation: unsupported sample rates (Opus supports 8/12/16/24/48
+/// kHz) and out-of-range channels rejected, and the 20 ms frame size is
+/// derived correctly at supported rates.
 #[test]
 fn test_codec_config_validation() {
     assert!(AudioCodecConfig::new(0, 2).is_err());
+    assert!(AudioCodecConfig::new(44_100, 2).is_err()); // not an Opus rate
     assert!(AudioCodecConfig::new(48_000, 0).is_err());
     assert!(AudioCodecConfig::new(48_000, 3).is_err());
 
     let mono = AudioCodecConfig::new(48_000, 1).unwrap();
     assert_eq!(mono.frame_size, 960);
-    let cd = AudioCodecConfig::new(44_100, 2).unwrap();
-    assert_eq!(cd.frame_size, 882); // 20 ms at 44.1 kHz
+    let wideband = AudioCodecConfig::new(16_000, 2).unwrap();
+    assert_eq!(wideband.frame_size, 320); // 20 ms at 16 kHz
 }
 
 /// Two sequential frames with a discontinuity still decode independently

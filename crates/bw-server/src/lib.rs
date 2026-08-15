@@ -10,7 +10,7 @@ use bw_clipboard::{ClipboardImage, ClipboardManager};
 use bw_input::{InputInjector, MouseButton};
 use bw_protocol::dispatcher::{DispatchError, MessageDispatcher};
 use bw_protocol::message::{
-    ClipboardEvent, ClipboardFormat, KeyboardEvent, MessageType, MouseEvent,
+    AudioPayload, ClipboardEvent, ClipboardFormat, KeyboardEvent, MessageType, MouseEvent,
 };
 use bw_protocol::routing::MessageEnvelope;
 
@@ -132,4 +132,22 @@ pub fn register_clipboard_handler(
             apply_clipboard_event(&mut manager, &event)
         }),
     );
+}
+
+/// Builds an outbound [`MessageType::AudioData`] message from an encoded
+/// Opus frame.
+///
+/// Used by the server's audio-forwarding thread (TASK-114) to wrap each
+/// captured frame with its format metadata before it is queued for the QUIC
+/// transport.
+pub fn audio_packet_message(
+    channels: u16,
+    sample_rate: u32,
+    opus_data: Vec<u8>,
+) -> Result<bw_protocol::message::ProtocolMessage, bw_protocol::error::ProtocolError> {
+    bw_protocol::message::ProtocolMessage::audio_data(AudioPayload {
+        channels,
+        sample_rate,
+        opus_data,
+    })
 }

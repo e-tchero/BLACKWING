@@ -29,13 +29,14 @@ impl AudioCodecConfig {
     ///
     /// # Errors
     ///
-    /// Returns [`AudioError::InvalidParameters`] when the sample rate is zero
-    /// or the channel count is outside the supported `1..=2` range.
+    /// Returns [`AudioError::InvalidParameters`] when the sample rate is not
+    /// one of the Opus-supported rates (8, 12, 16, 24 or 48 kHz) or the
+    /// channel count is outside the supported `1..=2` range.
     pub fn new(sample_rate: u32, channels: u16) -> Result<Self, AudioError> {
-        if sample_rate == 0 {
-            return Err(AudioError::InvalidParameters(
-                "sample rate must be non-zero".into(),
-            ));
+        if !matches!(sample_rate, 8_000 | 12_000 | 16_000 | 24_000 | 48_000) {
+            return Err(AudioError::InvalidParameters(format!(
+                "unsupported sample rate {sample_rate}; Opus supports 8, 12, 16, 24 or 48 kHz"
+            )));
         }
         if !(1..=2).contains(&channels) {
             return Err(AudioError::InvalidParameters(

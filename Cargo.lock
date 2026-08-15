@@ -420,6 +420,7 @@ dependencies = [
 name = "bw-server"
 version = "0.1.0"
 dependencies = [
+ "bw-audio",
  "bw-clipboard",
  "bw-crypto",
  "bw-input",
