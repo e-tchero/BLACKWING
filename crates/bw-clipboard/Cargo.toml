@@ -1,0 +1,12 @@
+[package]
+name = "bw-clipboard"
+version = "0.1.0"
+edition = "2024"
+description = "BLACKWING clipboard synchronization — safe cross-platform clipboard access via arboard"
+
+[dependencies]
+arboard = "3.6"
+thiserror = "2"
+
+[lints]
+workspace = true
