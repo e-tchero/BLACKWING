@@ -260,6 +260,8 @@ dependencies = [
 name = "bw-client"
 version = "0.1.0"
 dependencies = [
+ "bw-clipboard",
+ "bw-crypto",
  "bw-decoder",
  "bw-protocol",
  "pixels",

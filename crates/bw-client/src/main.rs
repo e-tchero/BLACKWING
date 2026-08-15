@@ -11,15 +11,21 @@
 //   is the standard convention for native application entry points. This
 //   override is scoped to the binary target only.
 
-use std::sync::Arc;
 use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
 
+use bw_clipboard::{ClipboardImage, ClipboardManager};
+use bw_crypto::DeviceId;
 use bw_decoder::DecodedImage;
-use bw_protocol::message::ProtocolMessage;
+use bw_protocol::dispatcher::{DispatchError, MessageDispatcher};
+use bw_protocol::message::{ClipboardEvent, ClipboardFormat, MessageType, ProtocolMessage};
+use bw_protocol::routing::{MessageEnvelope, NodeId, Route, SessionId};
 use pixels::{Pixels, PixelsBuilder, SurfaceTexture};
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
-use winit::event::{DeviceEvent, DeviceId, ElementState, MouseButton, WindowEvent};
+use winit::event::{
+    DeviceEvent, DeviceId as WinitDeviceId, ElementState, MouseButton, WindowEvent,
+};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::keyboard::PhysicalKey;
 use winit::window::{Window, WindowAttributes, WindowId};
@@ -50,12 +56,25 @@ struct App {
     _input_rx: tokio::sync::mpsc::Receiver<ProtocolMessage>,
     /// Current mouse button state: bit 0 = left, bit 1 = right, bit 2 = middle.
     buttons_mask: u8,
+    /// Dispatcher that routes inbound messages (e.g. remote clipboard
+    /// changes) to their registered handlers.
+    ///
+    /// Kept alive for the upcoming QUIC receiver path; the inbound routing
+    /// entry point (`handle_incoming_message`) is wired and unit-tested.
+    _dispatcher: MessageDispatcher,
 }
 
 impl App {
     /// Creates the application state with a frame receiver.
     fn new(frame_rx: mpsc::Receiver<DecodedImage>) -> Self {
         let (input_tx, _input_rx) = tokio::sync::mpsc::channel::<ProtocolMessage>(256);
+        let dispatcher = MessageDispatcher::new();
+        match ClipboardManager::new() {
+            Ok(manager) => register_clipboard_handler(&dispatcher, Arc::new(Mutex::new(manager))),
+            Err(e) => {
+                eprintln!("warning: clipboard unavailable — remote clipboard sync disabled: {e}");
+            }
+        }
         Self {
             window: None,
             pixels: None,
@@ -64,6 +83,7 @@ impl App {
             input_tx,
             _input_rx,
             buttons_mask: 0,
+            _dispatcher: dispatcher,
         }
     }
 
@@ -177,7 +197,7 @@ impl ApplicationHandler for App {
     fn device_event(
         &mut self,
         _event_loop: &ActiveEventLoop,
-        _device_id: DeviceId,
+        _device_id: WinitDeviceId,
         event: DeviceEvent,
     ) {
         if let DeviceEvent::MouseMotion { delta } = event {
@@ -187,6 +207,80 @@ impl ApplicationHandler for App {
             self.send_input(message);
         }
     }
+}
+
+/// Applies a decoded [`ClipboardEvent`] to the local OS clipboard.
+///
+/// Mirrors `bw-server`'s `apply_clipboard_event`: text events are written via
+/// [`ClipboardManager::set_text`], image events via
+/// [`ClipboardManager::set_image`]. Failures are reported as
+/// [`DispatchError::Handler`] so they propagate without panicking.
+fn apply_clipboard_event(
+    manager: &mut ClipboardManager,
+    event: &ClipboardEvent,
+) -> Result<(), DispatchError> {
+    match &event.format {
+        ClipboardFormat::Text => {
+            let text = std::str::from_utf8(&event.data)
+                .map_err(|e| DispatchError::Handler(format!("invalid clipboard UTF-8: {e}")))?;
+            manager
+                .set_text(text)
+                .map_err(|e| DispatchError::Handler(format!("clipboard write failed: {e}")))?;
+        }
+        ClipboardFormat::ImageRgba8 { width, height } => {
+            let image = ClipboardImage::new(*width, *height, event.data.clone())
+                .map_err(|e| DispatchError::Handler(format!("invalid clipboard image: {e}")))?;
+            manager
+                .set_image(&image)
+                .map_err(|e| DispatchError::Handler(format!("clipboard write failed: {e}")))?;
+        }
+    }
+    Ok(())
+}
+
+/// Registers the clipboard handler on the client's dispatcher.
+///
+/// Inbound [`MessageType::ClipboardData`] messages are decoded into a
+/// [`ClipboardEvent`] and applied to the shared [`ClipboardManager`] (the
+/// server's clipboard content, injected into the local OS clipboard).
+fn register_clipboard_handler(
+    dispatcher: &MessageDispatcher,
+    clipboard: Arc<Mutex<ClipboardManager>>,
+) {
+    dispatcher.register_handler(
+        MessageType::ClipboardData,
+        Arc::new(move |envelope: MessageEnvelope| {
+            let event = envelope.message.as_clipboard_event().ok_or_else(|| {
+                DispatchError::Handler("undecodable clipboard event payload".into())
+            })?;
+            let mut manager = clipboard
+                .lock()
+                .map_err(|e| DispatchError::Handler(format!("clipboard lock poisoned: {e}")))?;
+            apply_clipboard_event(&mut manager, &event)
+        }),
+    );
+}
+
+/// Routes an inbound protocol message through the client's dispatcher.
+///
+/// This is the entry point the QUIC network receiver will call when a server
+/// message arrives (currently only clipboard changes are wired). Placeholder
+/// routing coordinates are used until the session layer supplies real node
+/// identities.
+#[allow(dead_code)] // The QUIC receiver is not yet wired; exercised by the unit test.
+fn handle_incoming_message(
+    dispatcher: &MessageDispatcher,
+    message: ProtocolMessage,
+) -> Result<(), DispatchError> {
+    let envelope = MessageEnvelope {
+        source: NodeId(DeviceId::from_digest([0x01; 32])),
+        destination: NodeId(DeviceId::from_digest([0x02; 32])),
+        session_id: SessionId([0u8; 16]),
+        route: Route::Direct,
+        message,
+        routing_flags: 0,
+    };
+    dispatcher.dispatch(envelope)
 }
 
 /// Copies an RGB8 image (3 bytes/pixel) into an RGBA8 pixel-buffer frame
@@ -256,4 +350,70 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut app = App::new(frame_rx);
     event_loop.run_app(&mut app)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Mutex, OnceLock};
+
+    /// Serializes access to the global OS clipboard across tests in this
+    /// process (parallel clipboard operations can fail or clobber each other).
+    fn clipboard_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    /// Opens a clipboard manager, or skips when no clipboard is available
+    /// (e.g. a headless CI session).
+    fn open_clipboard() -> Option<ClipboardManager> {
+        match ClipboardManager::new() {
+            Ok(manager) => Some(manager),
+            Err(e) => {
+                eprintln!("skipping clipboard test: clipboard unavailable ({e})");
+                None
+            }
+        }
+    }
+
+    #[test]
+    fn test_clipboard_handler_applies_remote_text_event() {
+        let _guard = clipboard_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let Some(clipboard) = open_clipboard() else {
+            return;
+        };
+        let clipboard = Arc::new(Mutex::new(clipboard));
+        let dispatcher = MessageDispatcher::new();
+        register_clipboard_handler(&dispatcher, clipboard.clone());
+
+        let message = ProtocolMessage::clipboard_event(ClipboardEvent {
+            format: ClipboardFormat::Text,
+            data: b"remote clipboard from server".to_vec(),
+        })
+        .unwrap();
+        handle_incoming_message(&dispatcher, message).unwrap();
+
+        let mut manager = clipboard.lock().unwrap_or_else(|e| e.into_inner());
+        assert_eq!(manager.get_text().unwrap(), "remote clipboard from server");
+    }
+
+    #[test]
+    fn test_clipboard_handler_rejects_undecodable_payload() {
+        let _guard = clipboard_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let Some(clipboard) = open_clipboard() else {
+            return;
+        };
+        let clipboard = Arc::new(Mutex::new(clipboard));
+        let dispatcher = MessageDispatcher::new();
+        register_clipboard_handler(&dispatcher, clipboard.clone());
+
+        let message = ProtocolMessage {
+            message_type: MessageType::ClipboardData,
+            message_id: 0,
+            flags: 0,
+            payload: vec![0xde, 0xad, 0xbe, 0xef],
+        };
+        let err = handle_incoming_message(&dispatcher, message).unwrap_err();
+        assert!(matches!(err, DispatchError::Handler(_)));
+    }
 }
