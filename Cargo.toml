@@ -17,6 +17,7 @@ members = [
     "crates/bw-server",
     "crates/bw-clipboard",
     "crates/bw-audio",
+    "crates/bw-ice",
 ]
 
 [workspace.dependencies]

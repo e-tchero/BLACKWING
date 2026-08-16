@@ -1,0 +1,14 @@
+[package]
+name = "bw-ice"
+version = "0.1.0"
+edition = "2024"
+description = "BLACKWING ICE (STUN/TURN) NAT traversal — direct P2P connectivity over webrtc-ice"
+
+[dependencies]
+tokio = { workspace = true }
+thiserror = "2"
+webrtc-ice = "0.17.2"
+webrtc-util = { version = "0.17.1", default-features = false, features = ["conn"] }
+
+[lints]
+workspace = true
