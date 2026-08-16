@@ -479,6 +479,7 @@ version = "0.1.0"
 dependencies = [
  "bw-core",
  "bw-crypto",
+ "bw-ice",
  "bw-protocol",
  "bw-relay",
  "quinn",
@@ -486,6 +487,7 @@ dependencies = [
  "rustls",
  "thiserror 1.0.69",
  "tokio",
+ "webrtc-util",
 ]
 
 [[package]]

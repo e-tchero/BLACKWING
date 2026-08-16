@@ -90,6 +90,12 @@ impl IceConnection {
             .await
             .map_err(|e| IceError::ConnectFailed(e.to_string()))
     }
+
+    /// Returns the underlying datagram connection, for transport layers that
+    /// need to adapt the ICE socket to their own abstraction (e.g. Quinn).
+    pub fn inner(&self) -> Arc<dyn Conn + Send + Sync> {
+        Arc::clone(&self.conn)
+    }
 }
 
 /// Wraps a [`webrtc_ice::Agent`] behind a simplified API for gathering

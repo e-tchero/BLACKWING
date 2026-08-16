@@ -1,4 +1,6 @@
 use crate::cert;
+use crate::ice_socket::IceUdpSocket;
+use bw_ice::IceConnection;
 use quinn::{ClientConfig, Connection, Endpoint};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::sync::Arc;
@@ -59,6 +61,29 @@ impl QuicClient {
             endpoint.set_default_client_config(client_config);
             endpoint
         };
+
+        Ok(Self { endpoint })
+    }
+
+    /// Binds a QUIC endpoint whose datagrams travel over an established ICE
+    /// connection (the P2P path negotiated by `bw-ice`).
+    ///
+    /// The ICE socket reports the connection's local address, so the endpoint
+    /// uses no explicit bind address.
+    pub fn bind_with_ice(ice: IceConnection) -> Result<Self, QuicClientError> {
+        let tls_config = cert::generate_client_config();
+        let quic_client_config = quinn::crypto::rustls::QuicClientConfig::try_from(tls_config)
+            .map_err(|_| quinn::ConnectError::EndpointStopping)?;
+        let client_config = ClientConfig::new(Arc::new(quic_client_config));
+
+        let socket = IceUdpSocket::new(ice)?;
+        let mut endpoint = Endpoint::new_with_abstract_socket(
+            quinn::EndpointConfig::default(),
+            None,
+            socket,
+            Arc::new(quinn::TokioRuntime),
+        )?;
+        endpoint.set_default_client_config(client_config);
 
         Ok(Self { endpoint })
     }
