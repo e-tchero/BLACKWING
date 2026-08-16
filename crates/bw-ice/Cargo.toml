@@ -5,6 +5,7 @@ edition = "2024"
 description = "BLACKWING ICE (STUN/TURN) NAT traversal — direct P2P connectivity over webrtc-ice"
 
 [dependencies]
+bw-protocol = { path = "../bw-protocol" }
 tokio = { workspace = true }
 thiserror = "2"
 webrtc-ice = "0.17.2"

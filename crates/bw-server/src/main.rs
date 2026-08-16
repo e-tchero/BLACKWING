@@ -15,10 +15,13 @@ use std::sync::{Arc, Mutex};
 
 use bw_audio::AudioCapture;
 use bw_clipboard::ClipboardManager;
+use bw_ice::IcePeer;
 use bw_input::InputInjector;
 use bw_protocol::dispatcher::MessageDispatcher;
 use bw_protocol::message::ProtocolMessage;
-use bw_server::{audio_packet_message, register_clipboard_handler, register_input_handlers};
+use bw_server::{
+    audio_packet_message, register_clipboard_handler, register_ice_handler, register_input_handlers,
+};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let dispatcher = MessageDispatcher::new();
@@ -26,17 +29,46 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let clipboard = Arc::new(Mutex::new(ClipboardManager::new()?));
     register_clipboard_handler(&dispatcher, clipboard);
 
+    // Start the server-side ICE signaling peer (controlled role). The relay
+    // token is a placeholder until the QUIC/relay handshake is wired; both
+    // sides derive identical ICE credentials from it. Candidates exchanged
+    // over the relay negotiate a direct P2P path (TASK-119).
+    let relay_token = [0u8; 32];
+    let ice_peer = start_ice_peer(&relay_token, false);
+    register_ice_handler(&dispatcher, ice_peer);
+
     // Start host audio capture and queue the encoded frames as outbound
     // AudioData messages. Held so the outbound queue (and the capture thread)
     // lives for the process; the QUIC transport drains it once wired.
     let _outbound_audio = start_audio_capture();
 
-    eprintln!("BLACKWING server ready — input, clipboard and audio handlers registered");
+    eprintln!("BLACKWING server ready — input, clipboard, audio and ICE signaling registered");
     eprintln!("QUIC listener (bw-session) not yet wired; process idles until then.");
 
     // Keep the process alive; the dispatcher path is exercised by the E2E test.
     std::thread::park();
     Ok(())
+}
+
+/// Starts the server-side [`IcePeer`] on a background Tokio runtime.
+///
+/// Returns the peer, whose background candidate-gathering worker is driven by
+/// the runtime thread (kept alive for the process lifetime).
+fn start_ice_peer(token: &[u8; 32], is_controlling: bool) -> Arc<IcePeer> {
+    let runtime = tokio::runtime::Runtime::new().expect("failed to start ICE runtime");
+    let peer = runtime
+        .block_on(IcePeer::new(
+            token,
+            is_controlling,
+            bw_ice::IceConfig::default().urls,
+        ))
+        .expect("failed to start ICE peer");
+    std::thread::spawn(move || {
+        // Keep the runtime (and the peer's worker task) alive for the
+        // process lifetime.
+        runtime.block_on(std::future::pending::<()>());
+    });
+    Arc::new(peer)
 }
 
 /// Starts host audio capture and forwards each Opus frame as an outbound

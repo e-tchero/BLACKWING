@@ -13,6 +13,7 @@ bw-audio = { version = "0.1.0", path = "../bw-audio" }
 bw-clipboard = { version = "0.1.0", path = "../bw-clipboard" }
 bw-crypto = { version = "0.1.0", path = "../bw-crypto" }
 bw-decoder = { version = "0.1.0", path = "../bw-decoder" }
+bw-ice = { version = "0.1.0", path = "../bw-ice" }
 bw-protocol = { version = "0.1.0", path = "../bw-protocol" }
 # pixels 0.16 -> wgpu 27 -> windows 0.58. pixels 0.17 -> wgpu 29 -> windows 0.62,
 # which fails to compile on the D3D12 backend (wgpu-hal trait-bound errors).

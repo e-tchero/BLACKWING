@@ -31,6 +31,15 @@ pub struct IceConfig {
     /// Include loopback addresses in candidate gathering. Required for local
     /// tests over `127.0.0.1`; leave disabled in production.
     pub include_loopback: bool,
+
+    /// Optional fixed local ICE username fragment. When empty, the agent
+    /// generates a random one. Both peers deriving credentials from a shared
+    /// secret can use the same value here and set it as the remote
+    /// credential, avoiding a separate credential-signaling step.
+    pub local_ufrag: Option<String>,
+
+    /// Optional fixed local ICE password. See [`IceConfig::local_ufrag`].
+    pub local_pwd: Option<String>,
 }
 
 impl Default for IceConfig {
@@ -39,6 +48,8 @@ impl Default for IceConfig {
             urls: vec!["stun:stun.l.google.com:19302".to_string()],
             is_controlling: false,
             include_loopback: false,
+            local_ufrag: None,
+            local_pwd: None,
         }
     }
 }
@@ -122,6 +133,8 @@ impl IceManager {
             network_types: vec![NetworkType::Udp4],
             multicast_dns_mode: MulticastDnsMode::Disabled,
             include_loopback: config.include_loopback,
+            local_ufrag: config.local_ufrag.unwrap_or_default(),
+            local_pwd: config.local_pwd.unwrap_or_default(),
             ..Default::default()
         })
         .await

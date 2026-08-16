@@ -29,6 +29,8 @@
 
 pub mod error;
 pub mod manager;
+pub mod signaling;
 
 pub use error::IceError;
 pub use manager::{IceConfig, IceConnection, IceManager};
+pub use signaling::{IcePeer, ice_credentials_from_token};

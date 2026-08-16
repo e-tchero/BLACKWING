@@ -18,6 +18,7 @@ use bw_audio::{AudioCodecConfig, AudioPlayback};
 use bw_clipboard::{ClipboardImage, ClipboardManager};
 use bw_crypto::DeviceId;
 use bw_decoder::DecodedImage;
+use bw_ice::IcePeer;
 use bw_protocol::dispatcher::{DispatchError, MessageDispatcher};
 use bw_protocol::message::{ClipboardEvent, ClipboardFormat, MessageType, ProtocolMessage};
 use bw_protocol::routing::{MessageEnvelope, NodeId, Route, SessionId};
@@ -63,6 +64,13 @@ struct App {
     /// Kept alive for the upcoming QUIC receiver path; the inbound routing
     /// entry point (`handle_incoming_message`) is wired and unit-tested.
     _dispatcher: MessageDispatcher,
+    /// The client-side ICE signaling peer (controlling agent).
+    ///
+    /// Held so its background candidate-gathering worker stays alive; the
+    /// QUIC receiver will pump `IceCandidate` messages into it and, once a
+    /// direct path is negotiated, migrate the QUIC connection onto it
+    /// (TASK-118/119).
+    _ice_peer: Arc<IcePeer>,
 }
 
 impl App {
@@ -84,6 +92,14 @@ impl App {
                 eprintln!("warning: audio playback unavailable — remote audio disabled: {e}");
             }
         }
+
+        // Start the client-side ICE signaling peer (controlling agent) on a
+        // background runtime. The relay token is a placeholder until the
+        // QUIC/relay handshake is wired; both sides derive identical ICE
+        // credentials from it (TASK-119).
+        let ice_peer = start_ice_peer();
+        register_ice_handler(&dispatcher, Arc::clone(&ice_peer));
+
         Self {
             window: None,
             pixels: None,
@@ -93,6 +109,7 @@ impl App {
             _input_rx,
             buttons_mask: 0,
             _dispatcher: dispatcher,
+            _ice_peer: ice_peer,
         }
     }
 
@@ -291,6 +308,46 @@ fn register_audio_handler(dispatcher: &MessageDispatcher, playback: Arc<Mutex<Au
                 .map_err(|e| DispatchError::Handler(format!("audio decode failed: {e}")))
         }),
     );
+}
+
+/// Registers the ICE signaling handler on the client's dispatcher.
+///
+/// Inbound [`MessageType::IceCandidate`] messages (received from the server
+/// over the relay / signaling channel) are forwarded into the client's
+/// [`IcePeer`], which feeds them into its ICE agent for connectivity checks.
+fn register_ice_handler(dispatcher: &MessageDispatcher, peer: Arc<IcePeer>) {
+    dispatcher.register_handler(
+        MessageType::IceCandidate,
+        Arc::new(move |envelope: MessageEnvelope| {
+            peer.push_candidate(&envelope.message)
+                .map_err(|e| DispatchError::Handler(e.to_string()))
+        }),
+    );
+}
+
+/// Starts the client-side [`IcePeer`] (controlling agent) on a background
+/// Tokio runtime.
+///
+/// The relay token is a placeholder until the QUIC/relay handshake is wired;
+/// both sides derive identical ICE credentials from it. Returns the peer,
+/// whose background candidate-gathering worker is driven by the runtime
+/// thread (kept alive for the process lifetime).
+fn start_ice_peer() -> Arc<IcePeer> {
+    let runtime = tokio::runtime::Runtime::new().expect("failed to start ICE runtime");
+    let relay_token = [0u8; 32];
+    let peer = runtime
+        .block_on(IcePeer::new(
+            &relay_token,
+            true,
+            bw_ice::IceConfig::default().urls,
+        ))
+        .expect("failed to start ICE peer");
+    std::thread::spawn(move || {
+        // Keep the runtime (and the peer's worker task) alive for the
+        // process lifetime.
+        runtime.block_on(std::future::pending::<()>());
+    });
+    Arc::new(peer)
 }
 
 /// Routes an inbound protocol message through the client's dispatcher.
@@ -509,5 +566,61 @@ mod tests {
         };
         let err = handle_incoming_message(&dispatcher, message).unwrap_err();
         assert!(matches!(err, DispatchError::Handler(_)));
+    }
+
+    #[tokio::test]
+    async fn test_ice_peer_produces_candidate_messages() {
+        // Host-only gathering (no STUN urls) so the test is deterministic
+        // and network-independent.
+        let peer = IcePeer::new(&[0x42; 32], true, Vec::new())
+            .await
+            .expect("peer starts");
+
+        let mut seen = 0;
+        while let Some(message) = peer.next_outbound().await {
+            assert_eq!(message.message_type, MessageType::IceCandidate);
+            let payload = message.as_ice_candidate().expect("candidate payload");
+            assert!(!payload.candidate_str.is_empty());
+            seen += 1;
+        }
+        assert!(seen >= 1, "expected at least one gathered candidate");
+    }
+
+    #[tokio::test]
+    async fn test_ice_handler_routes_candidate_to_peer() {
+        let peer = Arc::new(
+            IcePeer::new(&[0x42; 32], false, Vec::new())
+                .await
+                .expect("peer starts"),
+        );
+        let dispatcher = MessageDispatcher::new();
+        register_ice_handler(&dispatcher, Arc::clone(&peer));
+
+        // A well-formed loopback host candidate routes through the dispatcher
+        // into the peer without error.
+        let message = ProtocolMessage::ice_candidate(bw_protocol::message::IceCandidatePayload {
+            candidate_str: "candidate:1 1 UDP 2130706431 127.0.0.1 50000 typ host".to_string(),
+            sdp_mid: None,
+            sdp_mline_index: None,
+        })
+        .expect("candidate message builds");
+        handle_incoming_message(&dispatcher, message).expect("candidate handled");
+    }
+
+    #[tokio::test]
+    async fn test_push_candidate_rejects_non_ice_message() {
+        let peer = Arc::new(
+            IcePeer::new(&[0x42; 32], false, Vec::new())
+                .await
+                .expect("peer starts"),
+        );
+        let data_message = ProtocolMessage {
+            message_type: MessageType::Data,
+            message_id: 0,
+            flags: 0,
+            payload: b"not an ice candidate".to_vec(),
+        };
+        let err = peer.push_candidate(&data_message).expect_err("rejected");
+        assert!(matches!(err, bw_ice::IceError::InvalidCandidate(_, _)));
     }
 }

@@ -7,6 +7,7 @@
 use std::sync::{Arc, Mutex};
 
 use bw_clipboard::{ClipboardImage, ClipboardManager};
+use bw_ice::IcePeer;
 use bw_input::{InputInjector, MouseButton};
 use bw_protocol::dispatcher::{DispatchError, MessageDispatcher};
 use bw_protocol::message::{
@@ -150,4 +151,19 @@ pub fn audio_packet_message(
         sample_rate,
         opus_data,
     })
+}
+
+/// Registers the ICE signaling handler on the dispatcher.
+///
+/// Inbound [`MessageType::IceCandidate`] messages (received from the remote
+/// peer over the relay / signaling channel) are forwarded into the
+/// [`IcePeer`], which feeds them into its ICE agent for connectivity checks.
+pub fn register_ice_handler(dispatcher: &MessageDispatcher, peer: Arc<IcePeer>) {
+    dispatcher.register_handler(
+        MessageType::IceCandidate,
+        Arc::new(move |envelope: MessageEnvelope| {
+            peer.push_candidate(&envelope.message)
+                .map_err(|e| DispatchError::Handler(e.to_string()))
+        }),
+    );
 }

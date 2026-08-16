@@ -28,4 +28,8 @@ pub enum IceError {
     /// Remote credentials were not set before establishing a connection.
     #[error("remote ICE credentials have not been set")]
     MissingRemoteCredentials,
+
+    /// A signaling channel closed unexpectedly.
+    #[error("ICE signaling channel closed")]
+    ChannelClosed,
 }

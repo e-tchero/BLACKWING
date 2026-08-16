@@ -324,6 +324,7 @@ dependencies = [
  "bw-clipboard",
  "bw-crypto",
  "bw-decoder",
+ "bw-ice",
  "bw-protocol",
  "pixels",
  "tokio",
@@ -392,6 +393,7 @@ dependencies = [
 name = "bw-ice"
 version = "0.1.0"
 dependencies = [
+ "bw-protocol",
  "thiserror 2.0.19",
  "tokio",
  "webrtc-ice",
@@ -454,9 +456,11 @@ dependencies = [
  "bw-audio",
  "bw-clipboard",
  "bw-crypto",
+ "bw-ice",
  "bw-input",
  "bw-protocol",
  "bw-session",
+ "tokio",
 ]
 
 [[package]]
