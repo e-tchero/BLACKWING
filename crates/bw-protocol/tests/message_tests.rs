@@ -2,8 +2,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)] // Test code may panic on failure (repo convention)
 use bw_protocol::error::ProtocolError;
 use bw_protocol::message::{
-    AudioPayload, ClipboardEvent, ClipboardFormat, KeyboardEvent, MessageType, MouseEvent,
-    ProtocolMessage,
+    AudioPayload, ClipboardEvent, ClipboardFormat, IceCandidatePayload, KeyboardEvent, MessageType,
+    MouseEvent, ProtocolMessage,
 };
 
 #[test]
@@ -21,6 +21,7 @@ fn test_message_types_serialization_roundtrip() {
         MessageType::InputMouse,
         MessageType::ClipboardData,
         MessageType::AudioData,
+        MessageType::IceCandidate,
     ];
 
     for &msg_type in &types {
@@ -287,6 +288,63 @@ fn test_audio_data_roundtrip() {
 fn test_audio_data_requires_payload() {
     let invalid = ProtocolMessage {
         message_type: MessageType::AudioData,
+        message_id: 1,
+        flags: 0,
+        payload: vec![],
+    };
+    assert_eq!(
+        invalid.validate().err(),
+        Some(ProtocolError::InvalidPayloadLength)
+    );
+}
+
+#[test]
+fn test_ice_candidate_roundtrip() {
+    let payload = IceCandidatePayload {
+        candidate_str: "candidate:1 1 UDP 2130706431 192.168.1.10 54321 typ host".into(),
+        sdp_mid: Some("0".into()),
+        sdp_mline_index: Some(0),
+    };
+    let msg = ProtocolMessage::ice_candidate(payload.clone()).unwrap();
+
+    assert_eq!(msg.message_type, MessageType::IceCandidate);
+    assert!(msg.validate().is_ok());
+    assert_eq!(msg.as_ice_candidate(), Some(payload.clone()));
+
+    // Wrong accessor for the message type returns None.
+    assert!(msg.as_audio_data().is_none());
+
+    // Wire round-trip preserves the candidate fields (including None optionals).
+    let encoded = msg.serialize().unwrap();
+    let decoded = ProtocolMessage::deserialize(&encoded).unwrap();
+    assert_eq!(decoded.message_type, MessageType::IceCandidate);
+    assert_eq!(decoded.as_ice_candidate(), Some(payload));
+
+    // Optionals round-trip as None too.
+    let no_mid = ProtocolMessage::ice_candidate(IceCandidatePayload {
+        candidate_str:
+            "candidate:2 1 UDP 1694498815 10.0.0.2 60000 typ srflx raddr 0.0.0.0 rport 0".into(),
+        sdp_mid: None,
+        sdp_mline_index: None,
+    })
+    .unwrap();
+    let encoded = no_mid.serialize().unwrap();
+    let decoded = ProtocolMessage::deserialize(&encoded).unwrap();
+    assert_eq!(
+        decoded.as_ice_candidate(),
+        Some(IceCandidatePayload {
+            candidate_str:
+                "candidate:2 1 UDP 1694498815 10.0.0.2 60000 typ srflx raddr 0.0.0.0 rport 0".into(),
+            sdp_mid: None,
+            sdp_mline_index: None,
+        })
+    );
+}
+
+#[test]
+fn test_ice_candidate_requires_payload() {
+    let invalid = ProtocolMessage {
+        message_type: MessageType::IceCandidate,
         message_id: 1,
         flags: 0,
         payload: vec![],

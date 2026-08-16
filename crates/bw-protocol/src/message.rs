@@ -31,6 +31,8 @@ pub enum MessageType {
     ClipboardData = 10,
     /// Encoded audio packet (Opus).
     AudioData = 11,
+    /// ICE candidate for P2P NAT traversal signaling.
+    IceCandidate = 12,
 }
 
 /// A remote keyboard event (key press or release).
@@ -102,6 +104,23 @@ pub struct AudioPayload {
     pub sample_rate: u32,
     /// One Opus-encoded audio frame.
     pub opus_data: Vec<u8>,
+}
+
+/// An ICE candidate for P2P NAT traversal.
+///
+/// Carried in the payload of a [`ProtocolMessage`] with
+/// [`MessageType::IceCandidate`]. `candidate_str` is the SDP-formatted
+/// candidate line exchanged between peers during connectivity checks; the
+/// optional `sdp_mid`/`sdp_mline_index` fields disambiguate which media
+/// stream the candidate belongs to.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct IceCandidatePayload {
+    /// SDP-formatted ICE candidate line (e.g. `candidate:1 1 UDP 2130706431 192.168.1.10 54321 typ host`).
+    pub candidate_str: String,
+    /// Media stream identification the candidate belongs to (when known).
+    pub sdp_mid: Option<String>,
+    /// 0-based media line index the candidate belongs to (when known).
+    pub sdp_mline_index: Option<u16>,
 }
 
 /// A structured protocol message with metadata and an owned payload.
@@ -270,6 +289,37 @@ impl ProtocolMessage {
         ciborium::de::from_reader(&self.payload[..]).ok()
     }
 
+    /// Builds a [`MessageType::IceCandidate`] message carrying an
+    /// [`IceCandidatePayload`].
+    ///
+    /// # Returns
+    ///
+    /// The constructed message, or `ProtocolError` if the payload cannot be
+    /// serialized.
+    pub fn ice_candidate(payload: IceCandidatePayload) -> Result<Self, ProtocolError> {
+        let mut payload_bytes = Vec::new();
+        ciborium::ser::into_writer(&payload, &mut payload_bytes)
+            .map_err(|_| ProtocolError::SerializationError)?;
+        Ok(Self {
+            message_type: MessageType::IceCandidate,
+            message_id: 0,
+            flags: 0,
+            payload: payload_bytes,
+        })
+    }
+
+    /// Returns the decoded [`IceCandidatePayload`] if this message is an ICE
+    /// candidate message.
+    ///
+    /// Returns `None` when the message type is not
+    /// [`MessageType::IceCandidate`] or the payload cannot be decoded.
+    pub fn as_ice_candidate(&self) -> Option<IceCandidatePayload> {
+        if self.message_type != MessageType::IceCandidate {
+            return None;
+        }
+        ciborium::de::from_reader(&self.payload[..]).ok()
+    }
+
     /// Validates protocol constraints on the message fields.
     pub fn validate(&self) -> Result<(), ProtocolError> {
         // Data messages must not have empty payload if flags indicate data presence
@@ -284,6 +334,7 @@ impl ProtocolMessage {
                 | MessageType::InputMouse
                 | MessageType::ClipboardData
                 | MessageType::AudioData
+                | MessageType::IceCandidate
         ) && self.payload.is_empty()
         {
             return Err(ProtocolError::InvalidPayloadLength);
