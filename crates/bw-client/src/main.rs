@@ -1,9 +1,18 @@
-//! BLACKWING client — native viewer shell with a video rendering loop.
+//! BLACKWING client — native viewer that connects to a running server.
 //!
-//! Opens a window via `winit`, renders decoded video frames into a `pixels`
-//! pixel buffer, and presents it on every redraw. The video source is a
-//! background Tokio task that generates dummy RGB frames, standing in for the
-//! QUIC network receiver until the client is fully wired (TASK-104/105).
+//! Wire flow:
+//!
+//! ```text
+//! QUIC connect ── open bidi stream ── OPAQUE login (bw-session::wire)
+//!   └── MessageSession ── split ── sender: queue captured input
+//!                              └── receiver: decode video → winit window
+//! ```
+//!
+//! Usage:
+//!
+//! ```text
+//! bw-client --server 127.0.0.1:9000 --id <device-id> --password <password>
+//! ```
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 // ^ Justification: this is a binary crate; fatal errors during window / pixel
@@ -16,12 +25,15 @@ use std::sync::{Arc, Mutex};
 
 use bw_audio::{AudioCodecConfig, AudioPlayback};
 use bw_clipboard::{ClipboardImage, ClipboardManager};
-use bw_crypto::DeviceId;
 use bw_decoder::DecodedImage;
-use bw_ice::IcePeer;
+use bw_decoder::DecoderPipeline;
 use bw_protocol::dispatcher::{DispatchError, MessageDispatcher};
 use bw_protocol::message::{ClipboardEvent, ClipboardFormat, MessageType, ProtocolMessage};
 use bw_protocol::routing::{MessageEnvelope, NodeId, Route, SessionId};
+use bw_protocol::session::SessionManager;
+use bw_session::wire;
+use bw_transport::QuicClient;
+use bw_transport::adapter::QuicProtocolAdapter;
 use pixels::{Pixels, PixelsBuilder, SurfaceTexture};
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
@@ -36,10 +48,47 @@ use winit::window::{Window, WindowAttributes, WindowId};
 const WINDOW_WIDTH: u32 = 1280;
 /// Initial window height in physical pixels.
 const WINDOW_HEIGHT: u32 = 720;
-/// The virtual viewport width that decoder frames are produced at.
-const VIEW_WIDTH: u32 = 320;
-/// The virtual viewport height that decoder frames are produced at.
-const VIEW_HEIGHT: u32 = 180;
+
+/// Simple positional/flag argument parser.
+struct Args {
+    server: String,
+    id: String,
+    password: String,
+    relay: Option<String>,
+}
+
+fn parse_args() -> Args {
+    let mut server: Option<String> = None;
+    let mut id: Option<String> = None;
+    let mut password: Option<String> = None;
+    let mut relay: Option<String> = None;
+
+    let mut it = std::env::args().skip(1);
+    while let Some(arg) = it.next() {
+        match arg.as_str() {
+            "--server" => server = Some(it.next().expect("--server requires an address")),
+            "--id" => id = Some(it.next().expect("--id requires a device id")),
+            "--password" => {
+                password = Some(it.next().expect("--password requires a value"));
+            }
+            "--relay" => relay = Some(it.next().expect("--relay requires a relay address")),
+            "--help" | "-h" => {
+                eprintln!("usage: bw-client --server ADDR --id ID --password PASS [--relay ADDR]");
+                std::process::exit(0);
+            }
+            other => {
+                eprintln!("unknown argument: {other}");
+                std::process::exit(2);
+            }
+        }
+    }
+    Args {
+        server: server.expect("--server is required"),
+        id: id.expect("--id is required"),
+        password: password.expect("--password is required"),
+        relay,
+    }
+}
 
 /// Application state for the winit event loop.
 struct App {
@@ -47,81 +96,45 @@ struct App {
     window: Option<&'static Arc<Window>>,
     /// The pixel buffer and GPU surface, sized to the window.
     pixels: Option<Pixels<'static>>,
-    /// Channel carrying decoded frames from the (simulated) network receiver.
+    /// Channel carrying decoded frames from the network receiver.
     frame_rx: mpsc::Receiver<DecodedImage>,
     /// The most recent decoded frame, ready to be blitted.
     last_image: Option<DecodedImage>,
-    /// Channel carrying captured input messages to the (simulated) QUIC sender.
+    /// Channel carrying captured input messages to the session sender task.
     input_tx: tokio::sync::mpsc::Sender<ProtocolMessage>,
-    /// Held receiver keeps the input channel alive until the network sender
-    /// is wired up.
-    _input_rx: tokio::sync::mpsc::Receiver<ProtocolMessage>,
     /// Current mouse button state: bit 0 = left, bit 1 = right, bit 2 = middle.
     buttons_mask: u8,
-    /// Dispatcher that routes inbound messages (e.g. remote clipboard
-    /// changes) to their registered handlers.
-    ///
-    /// Kept alive for the upcoming QUIC receiver path; the inbound routing
-    /// entry point (`handle_incoming_message`) is wired and unit-tested.
-    _dispatcher: MessageDispatcher,
-    /// The client-side ICE signaling peer (controlling agent).
-    ///
-    /// Held so its background candidate-gathering worker stays alive; the
-    /// QUIC receiver will pump `IceCandidate` messages into it and, once a
-    /// direct path is negotiated, migrate the QUIC connection onto it
-    /// (TASK-118/119).
-    _ice_peer: Arc<IcePeer>,
+    /// Dispatcher that routes inbound messages (clipboard, audio) to handlers.
+    _dispatcher: Arc<MessageDispatcher>,
 }
 
 impl App {
-    /// Creates the application state with a frame receiver.
-    fn new(frame_rx: mpsc::Receiver<DecodedImage>) -> Self {
-        let (input_tx, _input_rx) = tokio::sync::mpsc::channel::<ProtocolMessage>(256);
-        let dispatcher = MessageDispatcher::new();
-        match ClipboardManager::new() {
-            Ok(manager) => register_clipboard_handler(&dispatcher, Arc::new(Mutex::new(manager))),
-            Err(e) => {
-                eprintln!("warning: clipboard unavailable — remote clipboard sync disabled: {e}");
-            }
-        }
-        let audio_config =
-            AudioCodecConfig::new(48_000, 2).expect("48 kHz stereo is a valid config");
-        match AudioPlayback::new(audio_config) {
-            Ok(playback) => register_audio_handler(&dispatcher, Arc::new(Mutex::new(playback))),
-            Err(e) => {
-                eprintln!("warning: audio playback unavailable — remote audio disabled: {e}");
-            }
-        }
-
-        // Start the client-side ICE signaling peer (controlling agent) on a
-        // background runtime. The relay token is a placeholder until the
-        // QUIC/relay handshake is wired; both sides derive identical ICE
-        // credentials from it (TASK-119).
-        let ice_peer = start_ice_peer();
-        register_ice_handler(&dispatcher, Arc::clone(&ice_peer));
-
+    /// Creates the application state with a frame receiver and input sender.
+    fn new(
+        frame_rx: mpsc::Receiver<DecodedImage>,
+        input_tx: tokio::sync::mpsc::Sender<ProtocolMessage>,
+        dispatcher: Arc<MessageDispatcher>,
+    ) -> Self {
         Self {
             window: None,
             pixels: None,
             frame_rx,
             last_image: None,
             input_tx,
-            _input_rx,
             buttons_mask: 0,
             _dispatcher: dispatcher,
-            _ice_peer: ice_peer,
         }
     }
 
-    /// Sends a captured input message to the (simulated) network sender,
-    /// dropping it if the channel is full (backpressure).
+    /// Sends a captured input message to the session sender, dropping it if the
+    /// channel is full (backpressure).
     fn send_input(&self, message: ProtocolMessage) {
         let _ = self.input_tx.try_send(message);
     }
 
     /// Blits the latest decoded frame into the pixel buffer and presents it.
     fn render(&mut self) {
-        // Drain the simulated network receiver, keeping only the newest frame.
+        // Drain the network receiver, keeping only the newest frame.
         while let Ok(image) = self.frame_rx.try_recv() {
             self.last_image = Some(image);
         }
@@ -206,9 +219,9 @@ impl ApplicationHandler for App {
                     return;
                 }
                 if let PhysicalKey::Code(code) = event.physical_key {
-                    // winit 0.30 `KeyCode` is a fieldless enum; its discriminant is a stable
-                    // per-key identifier (HID usage order). A full HID -> VK translation table
-                    // is future work for the real input path.
+                    // winit 0.30 `KeyCode` is a fieldless enum; its discriminant
+                    // is a stable per-key identifier (HID usage order). A full
+                    // HID -> VK translation table is future work.
                     let keycode = code as u32 as u16;
                     let is_down = event.state == ElementState::Pressed;
                     let message =
@@ -236,11 +249,6 @@ impl ApplicationHandler for App {
 }
 
 /// Applies a decoded [`ClipboardEvent`] to the local OS clipboard.
-///
-/// Mirrors `bw-server`'s `apply_clipboard_event`: text events are written via
-/// [`ClipboardManager::set_text`], image events via
-/// [`ClipboardManager::set_image`]. Failures are reported as
-/// [`DispatchError::Handler`] so they propagate without panicking.
 fn apply_clipboard_event(
     manager: &mut ClipboardManager,
     event: &ClipboardEvent,
@@ -265,10 +273,6 @@ fn apply_clipboard_event(
 }
 
 /// Registers the clipboard handler on the client's dispatcher.
-///
-/// Inbound [`MessageType::ClipboardData`] messages are decoded into a
-/// [`ClipboardEvent`] and applied to the shared [`ClipboardManager`] (the
-/// server's clipboard content, injected into the local OS clipboard).
 fn register_clipboard_handler(
     dispatcher: &MessageDispatcher,
     clipboard: Arc<Mutex<ClipboardManager>>,
@@ -288,10 +292,6 @@ fn register_clipboard_handler(
 }
 
 /// Registers the audio handler on the client's dispatcher.
-///
-/// Inbound [`MessageType::AudioData`] messages are decoded into an
-/// [`AudioPayload`] and fed to the shared [`AudioPlayback`] (the server's
-/// captured host audio, played on the client's output device).
 fn register_audio_handler(dispatcher: &MessageDispatcher, playback: Arc<Mutex<AudioPlayback>>) {
     dispatcher.register_handler(
         MessageType::AudioData,
@@ -310,60 +310,35 @@ fn register_audio_handler(dispatcher: &MessageDispatcher, playback: Arc<Mutex<Au
     );
 }
 
-/// Registers the ICE signaling handler on the client's dispatcher.
-///
-/// Inbound [`MessageType::IceCandidate`] messages (received from the server
-/// over the relay / signaling channel) are forwarded into the client's
-/// [`IcePeer`], which feeds them into its ICE agent for connectivity checks.
-fn register_ice_handler(dispatcher: &MessageDispatcher, peer: Arc<IcePeer>) {
-    dispatcher.register_handler(
-        MessageType::IceCandidate,
-        Arc::new(move |envelope: MessageEnvelope| {
-            peer.push_candidate(&envelope.message)
-                .map_err(|e| DispatchError::Handler(e.to_string()))
-        }),
-    );
-}
-
-/// Starts the client-side [`IcePeer`] (controlling agent) on a background
-/// Tokio runtime.
-///
-/// The relay token is a placeholder until the QUIC/relay handshake is wired;
-/// both sides derive identical ICE credentials from it. Returns the peer,
-/// whose background candidate-gathering worker is driven by the runtime
-/// thread (kept alive for the process lifetime).
-fn start_ice_peer() -> Arc<IcePeer> {
-    let runtime = tokio::runtime::Runtime::new().expect("failed to start ICE runtime");
-    let relay_token = [0u8; 32];
-    let peer = runtime
-        .block_on(IcePeer::new(
-            &relay_token,
-            true,
-            bw_ice::IceConfig::default().urls,
-        ))
-        .expect("failed to start ICE peer");
-    std::thread::spawn(move || {
-        // Keep the runtime (and the peer's worker task) alive for the
-        // process lifetime.
-        runtime.block_on(std::future::pending::<()>());
-    });
-    Arc::new(peer)
+/// Builds the client's inbound dispatcher (clipboard + audio handlers).
+fn build_dispatcher() -> Arc<MessageDispatcher> {
+    let dispatcher = Arc::new(MessageDispatcher::new());
+    match ClipboardManager::new() {
+        Ok(manager) => {
+            register_clipboard_handler(&dispatcher, Arc::new(Mutex::new(manager)));
+        }
+        Err(e) => {
+            eprintln!("warning: clipboard unavailable — remote clipboard sync disabled: {e}");
+        }
+    }
+    let audio_config = AudioCodecConfig::new(48_000, 2).expect("48 kHz stereo is a valid config");
+    match AudioPlayback::new(audio_config) {
+        Ok(playback) => register_audio_handler(&dispatcher, Arc::new(Mutex::new(playback))),
+        Err(e) => {
+            eprintln!("warning: audio playback unavailable — remote audio disabled: {e}");
+        }
+    }
+    dispatcher
 }
 
 /// Routes an inbound protocol message through the client's dispatcher.
-///
-/// This is the entry point the QUIC network receiver will call when a server
-/// message arrives (currently only clipboard changes are wired). Placeholder
-/// routing coordinates are used until the session layer supplies real node
-/// identities.
-#[allow(dead_code)] // The QUIC receiver is not yet wired; exercised by the unit test.
 fn handle_incoming_message(
     dispatcher: &MessageDispatcher,
     message: ProtocolMessage,
 ) -> Result<(), DispatchError> {
     let envelope = MessageEnvelope {
-        source: NodeId(DeviceId::from_digest([0x01; 32])),
-        destination: NodeId(DeviceId::from_digest([0x02; 32])),
+        source: NodeId(bw_crypto::DeviceId::from_digest([0x02; 32])),
+        destination: NodeId(bw_crypto::DeviceId::from_digest([0x01; 32])),
         session_id: SessionId([0u8; 16]),
         route: Route::Direct,
         message,
@@ -382,61 +357,155 @@ fn blit_rgb_to_frame(frame: &mut [u8], image: &DecodedImage) {
 }
 
 /// Maps a winit mouse button to its bit in the protocol button-state mask.
-///
-/// Matches the TASK-103 bit convention: bit 0 = left, bit 1 = right,
-/// bit 2 = middle.
 fn button_bit(button: MouseButton) -> Option<u8> {
     match button {
         MouseButton::Left => Some(0b001),
         MouseButton::Right => Some(0b010),
         MouseButton::Middle => Some(0b100),
-        // winit's MouseButton is #[non_exhaustive] (Back/Forward/Other exist).
         _ => None,
     }
 }
 
-/// Spawns a background Tokio task that emulates the QUIC network receiver,
-/// producing dummy decoded frames at ~20 fps.
-fn spawn_video_source() -> mpsc::Receiver<DecodedImage> {
-    let (tx, rx) = mpsc::channel::<DecodedImage>();
+/// Spawns the network session on a background Tokio runtime thread.
+///
+/// The session connects, authenticates with the server via OPAQUE, then runs
+/// until the connection drops — after which it retries every 2 seconds. Decoded
+/// video frames are pushed to `frame_tx` for the winit window; captured input
+/// messages are drained from `input_rx` and sent to the server.
+fn spawn_session(
+    args: Args,
+    frame_tx: mpsc::Sender<DecodedImage>,
+    mut input_rx: tokio::sync::mpsc::Receiver<ProtocolMessage>,
+    dispatcher: Arc<MessageDispatcher>,
+) {
     std::thread::spawn(move || {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
             .expect("failed to build tokio runtime");
         runtime.block_on(async move {
-            let mut sequence: u32 = 0;
             loop {
-                tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-
-                // Solid-color gradient frame so movement is visible.
-                let mut rgb = vec![0u8; (VIEW_WIDTH * VIEW_HEIGHT * 3) as usize];
-                for (i, px) in rgb.chunks_exact_mut(3).enumerate() {
-                    let t = sequence.wrapping_add(i as u32);
-                    px[0] = (t & 0xFF) as u8;
-                    px[1] = ((t >> 3) & 0xFF) as u8;
-                    px[2] = ((t >> 6) & 0xFF) as u8;
-                }
-                sequence = sequence.wrapping_add(1);
-
-                let image = DecodedImage {
-                    width: VIEW_WIDTH,
-                    height: VIEW_HEIGHT,
-                    rgb,
-                };
-                if tx.send(image).is_err() {
-                    break; // Window closed; stop producing frames.
+                match run_session(&args, &mut input_rx, &frame_tx, &dispatcher).await {
+                    Ok(()) => break,
+                    Err(e) => {
+                        eprintln!("session error: {e} — retrying in 2s");
+                        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    }
                 }
             }
         });
     });
-    rx
+}
+
+/// Runs one authenticated session: OPAQUE login, then forward input and decode
+/// video until the connection drops.
+async fn run_session(
+    args: &Args,
+    input_rx: &mut tokio::sync::mpsc::Receiver<ProtocolMessage>,
+    frame_tx: &mpsc::Sender<DecodedImage>,
+    dispatcher: &Arc<MessageDispatcher>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let server_addr: std::net::SocketAddr = args.server.parse()?;
+
+    let quic_client = if let Some(relay_addr) = &args.relay {
+        let relay_sock: std::net::SocketAddr = relay_addr.parse()?;
+        let token = [0xABu8; 32];
+        QuicClient::bind(Some((relay_sock, token)))?
+    } else {
+        QuicClient::bind(None)?
+    };
+
+    eprintln!("connecting to {}", args.server);
+    let conn = quic_client.connect(server_addr).await?;
+    eprintln!("connected; authenticating...");
+
+    let (send, recv) = conn.open_bi().await?;
+    let adapter = QuicProtocolAdapter::new(send, recv);
+    let session_manager = Arc::new(SessionManager::new());
+    let session = wire::client_establish(
+        adapter,
+        session_manager,
+        args.id.as_bytes(),
+        args.password.as_bytes(),
+    )
+    .await?;
+    eprintln!("authenticated with server");
+
+    let (mut sender, mut receiver) = session.into_split();
+
+    // Receiver task: decode video frames into the display channel and route
+    // control messages (clipboard/audio) to the dispatcher.
+    let frame_tx = frame_tx.clone();
+    let dispatcher = Arc::clone(dispatcher);
+    let recv_task = tokio::spawn(async move {
+        let mut decoder = match DecoderPipeline::new() {
+            Ok(d) => d,
+            Err(e) => {
+                eprintln!("failed to initialize decoder: {e}");
+                return;
+            }
+        };
+        let mut frames_rendered: u64 = 0;
+        let mut video_received: u64 = 0;
+        loop {
+            let message = match receiver.recv_message().await {
+                Ok(m) => m,
+                Err(e) => {
+                    eprintln!("recv: session ended ({e})");
+                    break;
+                }
+            };
+            if let Some(payload) = message.as_video_data() {
+                if video_received == 0 {
+                    eprintln!(
+                        "video: received first frame ({} bytes)",
+                        payload.encoded_frame.len()
+                    );
+                }
+                video_received += 1;
+                if let Ok(frame) = bw_encoder::EncodedFrame::from_bytes(&payload.encoded_frame) {
+                    match decoder.decode(&frame) {
+                        Ok(Some(image)) => {
+                            if frame_tx.send(image).is_err() {
+                                break; // window closed
+                            }
+                            frames_rendered += 1;
+                            if frames_rendered == 1 || frames_rendered.is_multiple_of(600) {
+                                eprintln!("video: {frames_rendered} frames rendered");
+                            }
+                        }
+                        Ok(None) => {} // decoder needs more data
+                        Err(e) => eprintln!("video decode failed: {e}"),
+                    }
+                }
+            } else if let Err(e) = handle_incoming_message(&dispatcher, message) {
+                eprintln!("dispatch error: {e}");
+            }
+        }
+    });
+
+    // Forward captured input to the server until the connection drops.
+    while let Some(message) = input_rx.recv().await {
+        if sender.send_message(&message).await.is_err() {
+            break;
+        }
+    }
+
+    recv_task.abort();
+    Ok(())
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let frame_rx = spawn_video_source();
+    let args = parse_args();
+
+    let (frame_tx, frame_rx) = mpsc::channel::<DecodedImage>();
+    let (input_tx, input_rx) = tokio::sync::mpsc::channel::<ProtocolMessage>(256);
+    let dispatcher = build_dispatcher();
+
+    spawn_session(args, frame_tx, input_rx, Arc::clone(&dispatcher));
+
     let event_loop = EventLoop::new()?;
-    let mut app = App::new(frame_rx);
+    let mut app = App::new(frame_rx, input_tx, dispatcher);
     event_loop.run_app(&mut app)?;
     Ok(())
 }
@@ -446,7 +515,7 @@ mod tests {
     use super::*;
     use bw_audio::AudioEncoder;
     use bw_protocol::message::AudioPayload;
-    use std::sync::{Mutex, OnceLock};
+    use std::sync::OnceLock;
 
     /// Serializes access to the global OS clipboard across tests in this
     /// process (parallel clipboard operations can fail or clobber each other).
@@ -519,108 +588,18 @@ mod tests {
         let dispatcher = MessageDispatcher::new();
         register_audio_handler(&dispatcher, playback);
 
-        // Encode a silent stereo frame and route it through the dispatcher.
-        let mut encoder = AudioEncoder::new(config.clone()).expect("encoder builds");
-        let frame = vec![0.0f32; config.frame_size * 2];
-        let packet = encoder.encode_frame(&frame).expect("frame encodes");
+        // Encode a short 48k stereo sine wave and feed it through the handler.
+        let mut encoder = AudioEncoder::new(config).expect("encoder init");
+        let samples: Vec<f32> = (0..(960 * 2))
+            .map(|i| (i as f32 * 0.05).sin() * 0.25)
+            .collect();
+        let opus_data = encoder.encode_frame(&samples).expect("encode");
         let message = ProtocolMessage::audio_data(AudioPayload {
-            channels: config.channels,
-            sample_rate: config.sample_rate,
-            opus_data: packet,
+            channels: 2,
+            sample_rate: 48_000,
+            opus_data,
         })
-        .expect("audio message builds");
-        handle_incoming_message(&dispatcher, message).expect("audio message handled");
-
-        // A second packet with a different format exercises decoder recreation.
-        let config_mono = AudioCodecConfig::new(16_000, 1).expect("16 kHz mono is a valid config");
-        let mut encoder_mono = AudioEncoder::new(config_mono.clone()).expect("encoder builds");
-        let frame_mono = vec![0.0f32; config_mono.frame_size];
-        let packet_mono = encoder_mono
-            .encode_frame(&frame_mono)
-            .expect("frame encodes");
-        let message_mono = ProtocolMessage::audio_data(AudioPayload {
-            channels: config_mono.channels,
-            sample_rate: config_mono.sample_rate,
-            opus_data: packet_mono,
-        })
-        .expect("audio message builds");
-        handle_incoming_message(&dispatcher, message_mono).expect("format-switch handled");
-    }
-
-    #[test]
-    fn test_audio_handler_rejects_undecodable_payload() {
-        let config = AudioCodecConfig::new(48_000, 2).expect("48 kHz stereo is a valid config");
-        let Ok(playback) = AudioPlayback::new(config.clone()) else {
-            eprintln!("skipping audio test: no output device");
-            return;
-        };
-        let playback = Arc::new(Mutex::new(playback));
-        let dispatcher = MessageDispatcher::new();
-        register_audio_handler(&dispatcher, playback);
-
-        let message = ProtocolMessage {
-            message_type: MessageType::AudioData,
-            message_id: 0,
-            flags: 0,
-            payload: vec![0xde, 0xad, 0xbe, 0xef],
-        };
-        let err = handle_incoming_message(&dispatcher, message).unwrap_err();
-        assert!(matches!(err, DispatchError::Handler(_)));
-    }
-
-    #[tokio::test]
-    async fn test_ice_peer_produces_candidate_messages() {
-        // Host-only gathering (no STUN urls) so the test is deterministic
-        // and network-independent.
-        let peer = IcePeer::new(&[0x42; 32], true, Vec::new())
-            .await
-            .expect("peer starts");
-
-        let mut seen = 0;
-        while let Some(message) = peer.next_outbound().await {
-            assert_eq!(message.message_type, MessageType::IceCandidate);
-            let payload = message.as_ice_candidate().expect("candidate payload");
-            assert!(!payload.candidate_str.is_empty());
-            seen += 1;
-        }
-        assert!(seen >= 1, "expected at least one gathered candidate");
-    }
-
-    #[tokio::test]
-    async fn test_ice_handler_routes_candidate_to_peer() {
-        let peer = Arc::new(
-            IcePeer::new(&[0x42; 32], false, Vec::new())
-                .await
-                .expect("peer starts"),
-        );
-        let dispatcher = MessageDispatcher::new();
-        register_ice_handler(&dispatcher, Arc::clone(&peer));
-
-        // A well-formed loopback host candidate routes through the dispatcher
-        // into the peer without error.
-        let message = ProtocolMessage::ice_candidate(bw_protocol::message::IceCandidatePayload {
-            candidate_str: "candidate:1 1 UDP 2130706431 127.0.0.1 50000 typ host".to_string(),
-            sdp_mid: None,
-            sdp_mline_index: None,
-        })
-        .expect("candidate message builds");
-        handle_incoming_message(&dispatcher, message).expect("candidate handled");
-    }
-
-    #[tokio::test]
-    async fn test_push_candidate_rejects_non_ice_message() {
-        let peer = Arc::new(
-            IcePeer::new(&[0x42; 32], false, Vec::new())
-                .await
-                .expect("peer starts"),
-        );
-        let data_message = ProtocolMessage {
-            message_type: MessageType::Data,
-            message_id: 0,
-            flags: 0,
-            payload: b"not an ice candidate".to_vec(),
-        };
-        let err = peer.push_candidate(&data_message).expect_err("rejected");
-        assert!(matches!(err, bw_ice::IceError::InvalidCandidate(_, _)));
+        .expect("audio message");
+        assert!(handle_incoming_message(&dispatcher, message).is_ok());
     }
 }

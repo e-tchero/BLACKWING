@@ -14,16 +14,20 @@ path = "src/main.rs"
 
 [dependencies]
 bw-audio = { version = "0.1.0", path = "../bw-audio" }
+bw-auth = { version = "0.1.0", path = "../bw-auth" }
+bw-capture = { version = "0.1.0", path = "../bw-capture" }
 bw-clipboard = { version = "0.1.0", path = "../bw-clipboard" }
+bw-crypto = { version = "0.1.0", path = "../bw-crypto" }
+bw-encoder = { version = "0.1.0", path = "../bw-encoder" }
 bw-ice = { version = "0.1.0", path = "../bw-ice" }
 bw-input = { version = "0.1.0", path = "../bw-input" }
 bw-protocol = { version = "0.1.0", path = "../bw-protocol" }
-# Declared for the upcoming QUIC session-accept path; not yet used.
 bw-session = { version = "0.1.0", path = "../bw-session" }
+bw-transport = { version = "0.1.0", path = "../bw-transport" }
+quinn = "0.11"
 tokio = { workspace = true }
 
 [dev-dependencies]
-bw-crypto = { version = "0.1.0", path = "../bw-crypto" }
 
 [lints]
 workspace = true

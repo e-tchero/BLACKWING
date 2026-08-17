@@ -3,7 +3,7 @@
 use bw_protocol::error::ProtocolError;
 use bw_protocol::message::{
     AudioPayload, ClipboardEvent, ClipboardFormat, IceCandidatePayload, KeyboardEvent, MessageType,
-    MouseEvent, ProtocolMessage,
+    MouseEvent, ProtocolMessage, VideoPayload,
 };
 
 #[test]
@@ -22,6 +22,7 @@ fn test_message_types_serialization_roundtrip() {
         MessageType::ClipboardData,
         MessageType::AudioData,
         MessageType::IceCandidate,
+        MessageType::VideoData,
     ];
 
     for &msg_type in &types {
@@ -345,6 +346,46 @@ fn test_ice_candidate_roundtrip() {
 fn test_ice_candidate_requires_payload() {
     let invalid = ProtocolMessage {
         message_type: MessageType::IceCandidate,
+        message_id: 1,
+        flags: 0,
+        payload: vec![],
+    };
+    assert_eq!(
+        invalid.validate().err(),
+        Some(ProtocolError::InvalidPayloadLength)
+    );
+}
+
+#[test]
+fn test_video_data_roundtrip() {
+    let payload = VideoPayload {
+        encoded_frame: vec![0x00, 0x01, 0x02, 0x03, 0xde, 0xad, 0xbe, 0xef],
+    };
+    let msg = ProtocolMessage::video_data(payload.clone()).unwrap();
+
+    assert_eq!(msg.message_type, MessageType::VideoData);
+    assert!(msg.validate().is_ok());
+    assert_eq!(msg.as_video_data(), Some(payload.clone()));
+
+    // Wrong accessor for the message type returns None.
+    assert!(msg.as_audio_data().is_none());
+
+    // Wire round-trip preserves the encoded frame bytes.
+    let encoded = msg.serialize().unwrap();
+    let decoded = ProtocolMessage::deserialize(&encoded).unwrap();
+    assert_eq!(decoded.message_type, MessageType::VideoData);
+    assert_eq!(
+        decoded.as_video_data(),
+        Some(VideoPayload {
+            encoded_frame: vec![0x00, 0x01, 0x02, 0x03, 0xde, 0xad, 0xbe, 0xef],
+        })
+    );
+}
+
+#[test]
+fn test_video_data_requires_payload() {
+    let invalid = ProtocolMessage {
+        message_type: MessageType::VideoData,
         message_id: 1,
         flags: 0,
         payload: vec![],

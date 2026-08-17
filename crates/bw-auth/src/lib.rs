@@ -18,8 +18,15 @@
 pub mod client;
 pub mod error;
 pub mod server;
+pub mod store;
 
 pub use error::AuthError;
+// Re-exported so higher layers (bw-session wire protocol) can name the OPAQUE
+// message and credential types without depending on `opaque-ke` directly.
+pub use opaque_ke::{
+    CredentialFinalization, CredentialRequest, CredentialResponse, RegistrationRequest,
+    RegistrationResponse, RegistrationUpload, ServerRegistration, ServerSetup,
+};
 
 use opaque_ke::CipherSuite;
 use sha2::Sha512;

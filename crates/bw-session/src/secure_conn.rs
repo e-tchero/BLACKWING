@@ -16,6 +16,20 @@ use thiserror::Error;
 const PACKET_TYPE_HANDSHAKE: u16 = 0x01;
 const PACKET_TYPE_MESSAGE: u16 = 0x02;
 
+/// Maximum payload carried in a single wire frame. Kept well below
+/// `u16::MAX` so the 32-byte header's `payload_length` field cannot
+/// overflow even for large encrypted application payloads (e.g. video).
+const FRAGMENT_SIZE: usize = 60_000;
+
+/// Header `flags` bit meaning "more fragments follow this one".
+const FLAG_FRAGMENT_MORE: u16 = 0x0001;
+
+/// Encodes fragment metadata into the header `flags` field:
+/// bit 0 = "more fragments follow", bits 1..=15 = fragment index.
+fn fragment_flags(index: u16, more: bool) -> u16 {
+    (index << 1) | u16::from(more)
+}
+
 /// Errors that can occur during secure connection setup or use.
 #[derive(Debug, Error)]
 pub enum SecureConnError {
@@ -37,6 +51,9 @@ pub enum SecureConnError {
     /// The crypto layer reported an error.
     #[error("Crypto error: {0}")]
     Crypto(#[from] bw_crypto::error::CryptoError),
+    /// Fragments of a large message arrived out of order or with a gap.
+    #[error("fragmented message out of order")]
+    FragmentOutOfOrder,
 }
 
 /// A secure, encrypted session built on a QUIC protocol adapter.
@@ -203,18 +220,47 @@ impl SecureConnection {
             .session_manager
             .with_session_context(&self.session_id, |ctx| ctx.encrypt_frame(&frame))??;
         let cbor_bytes = encrypted_frame.serialize()?;
+        self.send_fragments(&cbor_bytes).await
+    }
 
+    /// Sends the encrypted message bytes, splitting them into multiple wire
+    /// frames when they exceed [`FRAGMENT_SIZE`].
+    async fn send_fragments(&mut self, cbor_bytes: &[u8]) -> Result<(), SecureConnError> {
+        if cbor_bytes.len() <= FRAGMENT_SIZE {
+            return self.send_one_fragment(0, false, cbor_bytes).await;
+        }
+        let total = cbor_bytes.len();
+        let mut index: u16 = 0;
+        let mut offset = 0;
+        while offset < total {
+            let end = (offset + FRAGMENT_SIZE).min(total);
+            let more = end < total;
+            self.send_one_fragment(index, more, &cbor_bytes[offset..end])
+                .await?;
+            index += 1;
+            offset = end;
+        }
+        Ok(())
+    }
+
+    /// Writes a single wire frame carrying one fragment of the message.
+    async fn send_one_fragment(
+        &mut self,
+        index: u16,
+        more: bool,
+        payload: &[u8],
+    ) -> Result<(), SecureConnError> {
         let secure_frame = ProtocolFrame {
             header: PacketHeader {
                 magic: PROTOCOL_MAGIC,
                 schema_version: CURRENT_VERSION.into(),
                 packet_type: PACKET_TYPE_MESSAGE,
-                payload_length: cbor_bytes.len() as u16,
+                flags: fragment_flags(index, more),
+                payload_length: payload.len() as u16,
                 ..Default::default()
             },
-            payload: &cbor_bytes,
+            payload,
         };
-
         self.adapter.send_frame(&secure_frame).await?;
         Ok(())
     }
@@ -226,17 +272,40 @@ impl SecureConnection {
         if self.state() != ConnectionState::Active {
             return Err(SecureConnError::LifecycleError);
         }
-
-        let mut buffer = Vec::new();
-        let secure_frame = self.adapter.recv_frame(&mut buffer).await?;
-
-        let encrypted_frame =
-            bw_protocol::encryption::EncryptedFrame::deserialize(secure_frame.payload)?;
-
+        let cbor_bytes = self.recv_fragments().await?;
+        let encrypted_frame = bw_protocol::encryption::EncryptedFrame::deserialize(&cbor_bytes)?;
         let decrypted_frame = self
             .session_manager
             .with_session_context(&self.session_id, |ctx| ctx.decrypt_frame(&encrypted_frame))??;
         Ok(decrypted_frame)
+    }
+
+    /// Reads wire frames until one complete (possibly fragmented) message is
+    /// reassembled, returning the raw encrypted message bytes.
+    async fn recv_fragments(&mut self) -> Result<Vec<u8>, SecureConnError> {
+        let mut buffer = Vec::new();
+        let first = self.adapter.recv_frame(&mut buffer).await?;
+        let index = first.header.flags >> 1;
+        let mut more = (first.header.flags & FLAG_FRAGMENT_MORE) != 0;
+        if index == 0 && !more {
+            // Unfragmented fast path (the common case).
+            return Ok(first.payload.to_vec());
+        }
+        let mut payload = Vec::with_capacity(FRAGMENT_SIZE * 2);
+        payload.extend_from_slice(first.payload);
+        let mut expected = u32::from(index) + 1;
+        while more {
+            let mut buf = Vec::new();
+            let fragment = self.adapter.recv_frame(&mut buf).await?;
+            let frag_index = fragment.header.flags >> 1;
+            more = (fragment.header.flags & FLAG_FRAGMENT_MORE) != 0;
+            if u32::from(frag_index) != expected {
+                return Err(SecureConnError::FragmentOutOfOrder);
+            }
+            payload.extend_from_slice(fragment.payload);
+            expected += 1;
+        }
+        Ok(payload)
     }
 
     /// Closes the secure connection, releasing the session.
@@ -245,5 +314,149 @@ impl SecureConnection {
         let _ = self.session_manager.close_session(&self.session_id);
         self.adapter.close().await;
         self.lifecycle.force_state(ConnectionState::Closed);
+    }
+}
+
+/// Send half of an established [`SecureConnection`].
+///
+/// Produced by [`SecureConnection::into_split`]; owns the QUIC send stream and
+/// shares the session's encryption context through the [`SessionManager`], so a
+/// sender task and a receiver task can drive the same session concurrently.
+pub struct SecureSender {
+    adapter: bw_transport::adapter::QuicSendAdapter,
+    session_id: SessionId,
+    session_manager: Arc<SessionManager>,
+}
+
+/// Receive half of an established [`SecureConnection`].
+pub struct SecureReceiver {
+    adapter: bw_transport::adapter::QuicRecvAdapter,
+    session_id: SessionId,
+    session_manager: Arc<SessionManager>,
+}
+
+impl SecureSender {
+    /// Sends an authenticated and encrypted frame over the secure connection.
+    pub async fn send_secure_frame(
+        &mut self,
+        frame: bw_protocol::frame::OwnedProtocolFrame,
+    ) -> Result<(), SecureConnError> {
+        let encrypted_frame = self
+            .session_manager
+            .with_session_context(&self.session_id, |ctx| ctx.encrypt_frame(&frame))??;
+        let cbor_bytes = encrypted_frame.serialize()?;
+        self.send_fragments(&cbor_bytes).await
+    }
+
+    /// Sends the encrypted message bytes, fragmenting into multiple wire
+    /// frames when they exceed [`FRAGMENT_SIZE`].
+    async fn send_fragments(&mut self, cbor_bytes: &[u8]) -> Result<(), SecureConnError> {
+        if cbor_bytes.len() <= FRAGMENT_SIZE {
+            return self.send_one_fragment(0, false, cbor_bytes).await;
+        }
+        let total = cbor_bytes.len();
+        let mut index: u16 = 0;
+        let mut offset = 0;
+        while offset < total {
+            let end = (offset + FRAGMENT_SIZE).min(total);
+            let more = end < total;
+            self.send_one_fragment(index, more, &cbor_bytes[offset..end])
+                .await?;
+            index += 1;
+            offset = end;
+        }
+        Ok(())
+    }
+
+    /// Writes a single wire frame carrying one fragment of the message.
+    async fn send_one_fragment(
+        &mut self,
+        index: u16,
+        more: bool,
+        payload: &[u8],
+    ) -> Result<(), SecureConnError> {
+        let secure_frame = ProtocolFrame {
+            header: PacketHeader {
+                magic: PROTOCOL_MAGIC,
+                schema_version: CURRENT_VERSION.into(),
+                packet_type: PACKET_TYPE_MESSAGE,
+                flags: fragment_flags(index, more),
+                payload_length: payload.len() as u16,
+                ..Default::default()
+            },
+            payload,
+        };
+        self.adapter.send_frame(&secure_frame).await?;
+        Ok(())
+    }
+
+    /// Gracefully finishes the underlying send stream.
+    pub async fn close(&mut self) {
+        self.adapter.close().await;
+    }
+}
+
+impl SecureReceiver {
+    /// Receives and decrypts an authenticated frame from the secure connection.
+    pub async fn recv_secure_frame(
+        &mut self,
+    ) -> Result<bw_protocol::frame::OwnedProtocolFrame, SecureConnError> {
+        let cbor_bytes = self.recv_fragments().await?;
+        let encrypted_frame = bw_protocol::encryption::EncryptedFrame::deserialize(&cbor_bytes)?;
+        let decrypted_frame = self
+            .session_manager
+            .with_session_context(&self.session_id, |ctx| ctx.decrypt_frame(&encrypted_frame))??;
+        Ok(decrypted_frame)
+    }
+
+    /// Reads wire frames until one complete (possibly fragmented) message is
+    /// reassembled, returning the raw encrypted message bytes.
+    async fn recv_fragments(&mut self) -> Result<Vec<u8>, SecureConnError> {
+        let mut buffer = Vec::new();
+        let first = self.adapter.recv_frame(&mut buffer).await?;
+        let index = first.header.flags >> 1;
+        let mut more = (first.header.flags & FLAG_FRAGMENT_MORE) != 0;
+        if index == 0 && !more {
+            // Unfragmented fast path (the common case).
+            return Ok(first.payload.to_vec());
+        }
+        let mut payload = Vec::with_capacity(FRAGMENT_SIZE * 2);
+        payload.extend_from_slice(first.payload);
+        let mut expected = u32::from(index) + 1;
+        while more {
+            let mut buf = Vec::new();
+            let fragment = self.adapter.recv_frame(&mut buf).await?;
+            let frag_index = fragment.header.flags >> 1;
+            more = (fragment.header.flags & FLAG_FRAGMENT_MORE) != 0;
+            if u32::from(frag_index) != expected {
+                return Err(SecureConnError::FragmentOutOfOrder);
+            }
+            payload.extend_from_slice(fragment.payload);
+            expected += 1;
+        }
+        Ok(payload)
+    }
+}
+
+impl SecureConnection {
+    /// Splits an established secure connection into independent sender and
+    /// receiver halves.
+    ///
+    /// Both halves share the session's encryption context (via the
+    /// [`SessionManager`]), so sends and receives can run concurrently in
+    /// separate tasks. Only call after the handshake completes.
+    pub fn into_split(self) -> (SecureSender, SecureReceiver) {
+        let (send_adapter, recv_adapter) = self.adapter.into_split();
+        let sender = SecureSender {
+            adapter: send_adapter,
+            session_id: self.session_id,
+            session_manager: Arc::clone(&self.session_manager),
+        };
+        let receiver = SecureReceiver {
+            adapter: recv_adapter,
+            session_id: self.session_id,
+            session_manager: self.session_manager,
+        };
+        (sender, receiver)
     }
 }

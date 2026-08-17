@@ -89,3 +89,89 @@ impl QuicProtocolAdapter {
         let _ = self.send.finish();
     }
 }
+/// Send-only half of a QUIC protocol adapter.
+///
+/// Produced by [`QuicProtocolAdapter::into_split`]; wraps the send stream so a
+/// session can be owned by independent sender and receiver tasks.
+pub struct QuicSendAdapter {
+    send: SendStream,
+}
+
+/// Receive-only half of a QUIC protocol adapter.
+///
+/// Produced by [`QuicProtocolAdapter::into_split`].
+pub struct QuicRecvAdapter {
+    recv: RecvStream,
+}
+
+impl QuicSendAdapter {
+    /// Serializes and sends a ProtocolFrame over the QUIC stream.
+    pub async fn send_frame(&mut self, frame: &ProtocolFrame<'_>) -> Result<(), AdapterError> {
+        let buffer = encode_frame(frame);
+        self.send.write_all(&buffer).await?;
+        Ok(())
+    }
+
+    /// Gracefully finishes the underlying send stream.
+    pub async fn close(&mut self) {
+        let _ = self.send.finish();
+    }
+}
+
+impl QuicRecvAdapter {
+    /// Reads bytes from the QUIC stream and deserializes them into a ProtocolFrame.
+    pub async fn recv_frame<'a>(
+        &mut self,
+        buffer: &'a mut Vec<u8>,
+    ) -> Result<ProtocolFrame<'a>, AdapterError> {
+        let header_size = std::mem::size_of::<PacketHeader>();
+
+        // Read header first
+        let mut header_buf = vec![0u8; header_size];
+        self.recv
+            .read_exact(&mut header_buf)
+            .await
+            .map_err(|e| match e {
+                quinn::ReadExactError::FinishedEarly(_) => AdapterError::Closed,
+                quinn::ReadExactError::ReadError(err) => AdapterError::Read(err),
+            })?;
+
+        // Deserialize header to find out payload length
+        let header = PacketHeader::try_from_bytes(&header_buf)?;
+
+        // Prepare buffer for header + payload
+        let total_size = header_size + header.payload_length as usize;
+        buffer.resize(total_size, 0);
+        buffer[..header_size].copy_from_slice(&header_buf);
+
+        // Read payload
+        if header.payload_length > 0 {
+            self.recv
+                .read_exact(&mut buffer[header_size..total_size])
+                .await
+                .map_err(|e| match e {
+                    quinn::ReadExactError::FinishedEarly(_) => AdapterError::Closed,
+                    quinn::ReadExactError::ReadError(err) => AdapterError::Read(err),
+                })?;
+        }
+
+        // Decode the entire frame
+        let frame = decode_frame(buffer)?;
+        Ok(frame)
+    }
+}
+
+impl QuicProtocolAdapter {
+    /// Splits the adapter into independent send and receive halves.
+    ///
+    /// Both halves share the same QUIC stream; the send half may be moved to a
+    /// sender task while the receive half runs in its own task. Encryption
+    /// state for the session lives in the shared [`SessionManager`], so the two
+    /// halves can operate concurrently.
+    pub fn into_split(self) -> (QuicSendAdapter, QuicRecvAdapter) {
+        (
+            QuicSendAdapter { send: self.send },
+            QuicRecvAdapter { recv: self.recv },
+        )
+    }
+}

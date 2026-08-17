@@ -1,7 +1,7 @@
 use crate::cert;
 use crate::ice_socket::IceUdpSocket;
 use bw_ice::IceConnection;
-use quinn::{Connection, Endpoint, ServerConfig};
+use quinn::{Connection, Endpoint, ServerConfig, TransportConfig};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use thiserror::Error;
@@ -40,9 +40,15 @@ impl QuicServer {
         let tls_config = cert::generate_server_config(subject_alt_names)?;
         let quic_server_config = quinn::crypto::rustls::QuicServerConfig::try_from(tls_config)
             .map_err(|_| QuicServerError::EndpointError)?;
-        let server_config = ServerConfig::with_crypto(Arc::new(quic_server_config));
+        let transport_config = TransportConfig::default();
+        let mut server_config = ServerConfig::with_crypto(Arc::new(quic_server_config));
+        server_config.transport_config(Arc::new(transport_config));
 
         let endpoint = if let Some((relay_addr, token)) = relay {
+            // Relay path needs QUIC keepalives so the relay's idle timer never expires.
+            let mut relay_transport_config = TransportConfig::default();
+            relay_transport_config.keep_alive_interval(Some(std::time::Duration::from_secs(10)));
+            server_config.transport_config(Arc::new(relay_transport_config));
             let std_socket = std::net::UdpSocket::bind(addr)?;
             std_socket.set_nonblocking(true)?;
             let tokio_socket = tokio::net::UdpSocket::from_std(std_socket)?;

@@ -33,6 +33,8 @@ pub enum MessageType {
     AudioData = 11,
     /// ICE candidate for P2P NAT traversal signaling.
     IceCandidate = 12,
+    /// Encoded video frame (H.264) from the agent to the client.
+    VideoData = 13,
 }
 
 /// A remote keyboard event (key press or release).
@@ -121,6 +123,18 @@ pub struct IceCandidatePayload {
     pub sdp_mid: Option<String>,
     /// 0-based media line index the candidate belongs to (when known).
     pub sdp_mline_index: Option<u16>,
+}
+
+/// Payload of a [`MessageType::VideoData`] message.
+///
+/// `encoded_frame` holds a serialized [`bw_encoder::EncodedFrame`]
+/// (`EncodedFrame::to_bytes()`), which carries the codec, dimensions, frame
+/// type, sequence number and the encoded NAL payload. The client reconstructs
+/// the frame with `EncodedFrame::from_bytes()` before decoding.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct VideoPayload {
+    /// Serialized [`bw_encoder::EncodedFrame`] bytes.
+    pub encoded_frame: Vec<u8>,
 }
 
 /// A structured protocol message with metadata and an owned payload.
@@ -320,6 +334,36 @@ impl ProtocolMessage {
         ciborium::de::from_reader(&self.payload[..]).ok()
     }
 
+    /// Builds a [`MessageType::VideoData`] message carrying a [`VideoPayload`].
+    ///
+    /// # Returns
+    ///
+    /// The constructed message, or `ProtocolError` if the payload cannot be
+    /// serialized.
+    pub fn video_data(payload: VideoPayload) -> Result<Self, ProtocolError> {
+        let mut payload_bytes = Vec::new();
+        ciborium::ser::into_writer(&payload, &mut payload_bytes)
+            .map_err(|_| ProtocolError::SerializationError)?;
+        Ok(Self {
+            message_type: MessageType::VideoData,
+            message_id: 0,
+            flags: 0,
+            payload: payload_bytes,
+        })
+    }
+
+    /// Returns the decoded [`VideoPayload`] if this message is a video
+    /// message.
+    ///
+    /// Returns `None` when the message type is not [`MessageType::VideoData`]
+    /// or the payload cannot be decoded.
+    pub fn as_video_data(&self) -> Option<VideoPayload> {
+        if self.message_type != MessageType::VideoData {
+            return None;
+        }
+        ciborium::de::from_reader(&self.payload[..]).ok()
+    }
+
     /// Validates protocol constraints on the message fields.
     pub fn validate(&self) -> Result<(), ProtocolError> {
         // Data messages must not have empty payload if flags indicate data presence
@@ -335,6 +379,7 @@ impl ProtocolMessage {
                 | MessageType::ClipboardData
                 | MessageType::AudioData
                 | MessageType::IceCandidate
+                | MessageType::VideoData
         ) && self.payload.is_empty()
         {
             return Err(ProtocolError::InvalidPayloadLength);

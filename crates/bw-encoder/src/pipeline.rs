@@ -28,11 +28,15 @@ impl EncoderPipeline {
                             match encoded_tx.try_send(encoded_frame) {
                                 Ok(_) => sequence += 1,
                                 Err(mpsc::error::TrySendError::Full(_)) => {
-                                    // Backpressure: channel is full, drop frame
+                                    // Backpressure: channel is full, drop the frame.
+                                    // Force the next encoded frame to be a keyframe so a
+                                    // client that missed this reference frame can resync —
+                                    // otherwise the whole P-frame reference chain is lost.
                                     eprintln!(
-                                        "EncoderPipeline: Dropping frame {} due to backpressure",
+                                        "EncoderPipeline: Dropping frame {} due to backpressure; forcing keyframe",
                                         sequence
                                     );
+                                    backend.force_keyframe();
                                 }
                                 Err(mpsc::error::TrySendError::Closed(_)) => {
                                     // Receiver dropped, stop encoding

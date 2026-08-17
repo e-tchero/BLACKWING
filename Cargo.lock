@@ -324,8 +324,11 @@ dependencies = [
  "bw-clipboard",
  "bw-crypto",
  "bw-decoder",
+ "bw-encoder",
  "bw-ice",
  "bw-protocol",
+ "bw-session",
+ "bw-transport",
  "pixels",
  "tokio",
  "winit",
@@ -442,6 +445,7 @@ version = "0.1.0"
 dependencies = [
  "bw-core",
  "bw-crypto",
+ "ciborium",
  "getrandom 0.2.17",
  "serde",
  "sha2",
@@ -454,12 +458,17 @@ name = "bw-server"
 version = "0.1.0"
 dependencies = [
  "bw-audio",
+ "bw-auth",
+ "bw-capture",
  "bw-clipboard",
  "bw-crypto",
+ "bw-encoder",
  "bw-ice",
  "bw-input",
  "bw-protocol",
  "bw-session",
+ "bw-transport",
+ "quinn",
  "tokio",
 ]
 

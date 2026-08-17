@@ -50,9 +50,35 @@ impl EncoderBackend for OpenH264Backend {
     }
 
     fn encode_frame(&mut self, frame: &Frame, sequence: u64) -> Result<EncodedFrame, EncoderError> {
+        // A frame with no pixel data (e.g. an idle-screen timeout frame) has
+        // nothing to encode; skip it rather than panicking on the conversion.
+        let expected = (frame.width as usize)
+            .checked_mul(frame.height as usize)
+            .and_then(|n| n.checked_mul(4));
+        match expected {
+            Some(n) if frame.buffer.len() >= n => {}
+            _ => {
+                return Err(EncoderError::EncodeFailed(
+                    "frame has no pixel data (empty capture frame)".into(),
+                ));
+            }
+        }
+
         if self.encoder.is_none() || frame.width != self.width || frame.height != self.height {
             // Resolution changed or not started, re-initialize
             self.start(frame.width, frame.height, self.config.clone())?;
+        }
+
+        // Enforce the configured keyframe interval: force an IDR so a client
+        // that dropped frames under backpressure can resync. Without this, a
+        // single lost P-frame permanently breaks the decode reference chain.
+        if self.config.keyframe_interval > 0
+            && self.frames_since_idr >= self.config.keyframe_interval
+        {
+            self.encoder
+                .as_mut()
+                .ok_or(EncoderError::Stopped)?
+                .force_intra_frame();
         }
 
         let encoder = self.encoder.as_mut().ok_or(EncoderError::Stopped)?;
@@ -101,7 +127,6 @@ impl EncoderBackend for OpenH264Backend {
             self.frames_since_idr = 0;
         } else {
             self.frames_since_idr += 1;
-            // Ideally force IDR via API here if frames_since_idr >= config.keyframe_interval
         }
 
         let frame_type = if is_idr {
@@ -120,6 +145,13 @@ impl EncoderBackend for OpenH264Backend {
             codec: crate::Codec::H264,
             payload,
         })
+    }
+
+    fn force_keyframe(&mut self) {
+        if let Some(encoder) = self.encoder.as_mut() {
+            encoder.force_intra_frame();
+        }
+        self.frames_since_idr = 0;
     }
 
     fn stop(&mut self) {

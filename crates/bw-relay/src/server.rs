@@ -1,5 +1,5 @@
 use crate::clock::{Clock, SystemClock};
-use crate::forwarding::ForwardingTable;
+use crate::forwarding::{ForwardingTable, RATE_LIMIT_BYTES_PER_SEC, SESSION_EXPIRY_MS};
 use crate::protocol::RelayMessage;
 use crate::rendezvous::RendezvousRegistry;
 use bw_crypto::{DeviceId, Signature, VerifyKey};
@@ -64,10 +64,36 @@ impl RelayServer {
 
     /// Creates a new relay server with a specific clock for testing.
     pub fn with_clock(clock: Arc<dyn Clock>) -> Arc<Self> {
+        Self::with_clock_and_rate_limit(clock, RATE_LIMIT_BYTES_PER_SEC)
+    }
+
+    /// Creates a new relay server with a specific clock and per-session rate
+    /// limit (bytes per second). Operators must size the rate limit above the
+    /// peak stream bitrate — IDR keyframes burst well above the encoder's
+    /// average target, and a limit equal to the average silently drops the
+    /// keyframes the decoder needs to resync.
+    pub fn with_clock_and_rate_limit(
+        clock: Arc<dyn Clock>,
+        rate_limit_bytes_per_sec: u64,
+    ) -> Arc<Self> {
+        Self::with_clock_and_limits(clock, rate_limit_bytes_per_sec, SESSION_EXPIRY_MS)
+    }
+
+    /// Creates a new relay server with a specific clock, per-session rate
+    /// limit (bytes/sec), and absolute session lifetime (milliseconds).
+    pub fn with_clock_and_limits(
+        clock: Arc<dyn Clock>,
+        rate_limit_bytes_per_sec: u64,
+        session_expiry_ms: u64,
+    ) -> Arc<Self> {
         Arc::new(Self {
             registry: RwLock::new(HashMap::new()),
             rendezvous: RendezvousRegistry::with_clock(clock.clone()),
-            forwarding: Arc::new(ForwardingTable::new(clock.clone())),
+            forwarding: Arc::new(ForwardingTable::with_limits(
+                clock.clone(),
+                rate_limit_bytes_per_sec,
+                session_expiry_ms,
+            )),
             next_session_id: std::sync::atomic::AtomicU64::new(1),
             clock,
         })

@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+bw-auth = { path = "../bw-auth" }
 bw-core = { path = "../bw-core" }
 bw-crypto = { path = "../bw-crypto" }
 bw-protocol = { path = "../bw-protocol" }
@@ -15,6 +16,3 @@ log = "0.4"
 
 [lints]
 workspace = true
-
-[dev-dependencies]
-bw-auth = { path = "../bw-auth" }

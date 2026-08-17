@@ -634,6 +634,43 @@ fn test_rate_limit_drops_excess_packets() {
     );
 }
 
+// ── 22b. Configurable per-session rate limit ──────────────────────────────────
+#[test]
+fn test_configurable_rate_limit() {
+    let clock = Arc::new(MockClock::new(1_000));
+    // 10 KB/s bucket instead of the default 625 KB/s.
+    let table = ForwardingTable::with_rate_limit(clock.clone(), 10_000);
+
+    let (intent_id, token, init_id, tgt_id) = make_pair();
+    let addr_a = make_addr(10067);
+    let addr_b = make_addr(10068);
+
+    table.authorize_pair(intent_id, token, init_id, tgt_id);
+    table.update_binding(intent_id, init_id, addr_a).unwrap();
+    table.update_binding(intent_id, tgt_id, addr_b).unwrap();
+
+    // Bucket capacity is now 10_000 / 2_000 = 5 packets of 2 KB.
+    let packet_size = 2_000;
+    let mut forwarded = 0usize;
+    let mut dropped = 0usize;
+    for _ in 0..10 {
+        if table.get_destination(&token, addr_a, packet_size).is_some() {
+            forwarded += 1;
+        } else {
+            dropped += 1;
+        }
+    }
+
+    assert_eq!(
+        forwarded, 5,
+        "Custom bucket (10 KB) should allow exactly 5 x 2 KB packets"
+    );
+    assert_eq!(
+        dropped, 5,
+        "Remaining packets must be dropped by the custom limit"
+    );
+}
+
 // ── 23. Brute-force blocklist after repeated failed lookups ───────────────────
 #[test]
 fn test_brute_force_blocklist() {

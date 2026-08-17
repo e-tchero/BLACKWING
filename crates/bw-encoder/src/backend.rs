@@ -46,6 +46,13 @@ pub trait EncoderBackend: Send {
     /// Encodes a raw captured frame and returns an encoded frame.
     fn encode_frame(&mut self, frame: &Frame, sequence: u64) -> Result<EncodedFrame, EncoderError>;
 
+    /// Forces the next encoded frame to be a keyframe (IDR).
+    ///
+    /// Called by the pipeline when a frame was dropped under backpressure so
+    /// the stream never leaves the decoder with a permanently broken reference
+    /// chain: the next frame resyncs the client.
+    fn force_keyframe(&mut self);
+
     /// Stops the encoder.
     fn stop(&mut self);
 }

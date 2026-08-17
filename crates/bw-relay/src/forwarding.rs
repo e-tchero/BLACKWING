@@ -108,16 +108,42 @@ pub struct ForwardingTable {
     token_index: RwLock<HashMap<[u8; 32], [u8; 16]>>,
     /// Failed lookup counter per source IP: (count, window_start_ms).
     failed_lookups: RwLock<HashMap<IpAddr, (u64, u64)>>,
+    /// Per-session rate limit in bytes per second.
+    rate_limit_bytes_per_sec: u64,
+    /// Absolute per-session lifetime in milliseconds, regardless of activity.
+    session_expiry_ms: u64,
     clock: Arc<dyn Clock>,
 }
 
 impl ForwardingTable {
-    /// Creates a new, empty forwarding table backed by the given clock.
+    /// Creates a new, empty forwarding table backed by the given clock using
+    /// the default per-session rate limit.
     pub fn new(clock: Arc<dyn Clock>) -> Self {
+        Self::with_rate_limit(clock, RATE_LIMIT_BYTES_PER_SEC)
+    }
+
+    /// Creates a new, empty forwarding table with a custom per-session rate
+    /// limit (bytes per second). Operators must size this above the expected
+    /// peak stream bitrate: the encoder targets 5 Mbps, but IDR keyframes burst
+    /// well above the average, so a limit equal to the average bitrate silently
+    /// drops the very keyframes the decoder needs to resync.
+    pub fn with_rate_limit(clock: Arc<dyn Clock>, rate_limit_bytes_per_sec: u64) -> Self {
+        Self::with_limits(clock, rate_limit_bytes_per_sec, SESSION_EXPIRY_MS)
+    }
+
+    /// Creates a new, empty forwarding table with a custom per-session rate
+    /// limit and absolute session lifetime (milliseconds).
+    pub fn with_limits(
+        clock: Arc<dyn Clock>,
+        rate_limit_bytes_per_sec: u64,
+        session_expiry_ms: u64,
+    ) -> Self {
         Self {
             contexts: RwLock::new(HashMap::new()),
             token_index: RwLock::new(HashMap::new()),
             failed_lookups: RwLock::new(HashMap::new()),
+            rate_limit_bytes_per_sec,
+            session_expiry_ms,
             clock,
         }
     }
@@ -147,11 +173,11 @@ impl ForwardingTable {
             },
             state: ForwardingState::Authorized,
             last_active_ms: now,
-            expires_at_ms: now + SESSION_EXPIRY_MS,
+            expires_at_ms: now + self.session_expiry_ms,
             bytes_forwarded: 0,
             authorized_at_ms: now,
             rate_bucket: RateBucket {
-                tokens: RATE_LIMIT_BYTES_PER_SEC as f64,
+                tokens: self.rate_limit_bytes_per_sec as f64,
                 last_refill_ms: now,
             },
         };
@@ -332,8 +358,8 @@ impl ForwardingTable {
         // Token-bucket rate limiting: refill, then check the packet fits.
         let elapsed_s = now.saturating_sub(ctx.rate_bucket.last_refill_ms) as f64 / 1000.0;
         ctx.rate_bucket.tokens = (ctx.rate_bucket.tokens
-            + elapsed_s * RATE_LIMIT_BYTES_PER_SEC as f64)
-            .min(RATE_LIMIT_BYTES_PER_SEC as f64);
+            + elapsed_s * self.rate_limit_bytes_per_sec as f64)
+            .min(self.rate_limit_bytes_per_sec as f64);
         ctx.rate_bucket.last_refill_ms = now;
 
         let packet_len_f = packet_len as f64;

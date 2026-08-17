@@ -1,7 +1,7 @@
 use crate::cert;
 use crate::ice_socket::IceUdpSocket;
 use bw_ice::IceConnection;
-use quinn::{ClientConfig, Connection, Endpoint};
+use quinn::{ClientConfig, Connection, Endpoint, TransportConfig};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::sync::Arc;
 use thiserror::Error;
@@ -38,9 +38,15 @@ impl QuicClient {
         let tls_config = cert::generate_client_config();
         let quic_client_config = quinn::crypto::rustls::QuicClientConfig::try_from(tls_config)
             .map_err(|_| quinn::ConnectError::EndpointStopping)?;
-        let client_config = ClientConfig::new(Arc::new(quic_client_config));
+        let transport_config = TransportConfig::default();
+        let mut client_config = ClientConfig::new(Arc::new(quic_client_config));
+        client_config.transport_config(Arc::new(transport_config));
 
         let endpoint = if let Some((relay_addr, token)) = relay {
+            // Relay path needs QUIC keepalives so the relay's idle timer never expires.
+            let mut relay_transport_config = TransportConfig::default();
+            relay_transport_config.keep_alive_interval(Some(std::time::Duration::from_secs(10)));
+            client_config.transport_config(Arc::new(relay_transport_config));
             let std_socket = std::net::UdpSocket::bind(addr)?;
             std_socket.set_nonblocking(true)?;
             let tokio_socket = tokio::net::UdpSocket::from_std(std_socket)?;

@@ -69,6 +69,13 @@ pub fn finish_registration(
     Ok(result.message)
 }
 
+/// Deserializes a server credential response received over the wire.
+pub fn deserialize_credential_response(
+    bytes: &[u8],
+) -> Result<CredentialResponse<DefaultCipherSuite>, AuthError> {
+    CredentialResponse::deserialize(bytes).map_err(AuthError::from)
+}
+
 /// Starts OPAQUE login from the client side.
 ///
 /// Returns the [`CredentialRequest`] to send to the server and the client

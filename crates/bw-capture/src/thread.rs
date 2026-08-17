@@ -38,6 +38,11 @@ impl CaptureThread {
 
                     match backend.next_frame() {
                         Ok(frame) => {
+                            // Skip empty frames (e.g. DXGI WAIT_TIMEOUT when the
+                            // screen is idle): there is nothing to encode.
+                            if frame.buffer.is_empty() {
+                                continue;
+                            }
                             // If the channel is full or closed, we might drop the frame.
                             // blocking_send is used because we are in a synchronous OS thread.
                             if frame_tx.blocking_send(frame).is_err() {

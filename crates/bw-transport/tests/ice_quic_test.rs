@@ -51,9 +51,21 @@ async fn establish_ice_pair() -> (bw_ice::IceConnection, bw_ice::IceConnection) 
         }
         out
     });
-    let (c_cands, d_cands) = tokio::join!(c_collect, d_collect);
+    let (c_cands, d_cands) = timeout(Duration::from_secs(30), async {
+        tokio::join!(c_collect, d_collect)
+    })
+    .await
+    .expect("ICE candidate gathering timed out");
     let c_cands = c_cands.unwrap();
     let d_cands = d_cands.unwrap();
+    assert!(
+        !c_cands.is_empty(),
+        "controlling agent gathered no candidates"
+    );
+    assert!(
+        !d_cands.is_empty(),
+        "controlled agent gathered no candidates"
+    );
 
     for cand in &c_cands {
         controlled.add_remote_candidate(cand).await.unwrap();
