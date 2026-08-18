@@ -41,7 +41,7 @@ use winit::event::{
     DeviceEvent, DeviceId as WinitDeviceId, ElementState, MouseButton, WindowEvent,
 };
 use winit::event_loop::{ActiveEventLoop, EventLoop};
-use winit::keyboard::PhysicalKey;
+use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowAttributes, WindowId};
 
 /// Initial window width in physical pixels.
@@ -219,10 +219,13 @@ impl ApplicationHandler for App {
                     return;
                 }
                 if let PhysicalKey::Code(code) = event.physical_key {
-                    // winit 0.30 `KeyCode` is a fieldless enum; its discriminant
-                    // is a stable per-key identifier (HID usage order). A full
-                    // HID -> VK translation table is future work.
-                    let keycode = code as u32 as u16;
+                    // winit's `KeyCode` discriminant is NOT a Win32 virtual-key
+                    // code, so translate it before sending (see
+                    // `winit_keycode_to_vk`). Keys without a VK mapping are
+                    // skipped.
+                    let Some(keycode) = winit_keycode_to_vk(code) else {
+                        return;
+                    };
                     let is_down = event.state == ElementState::Pressed;
                     let message =
                         ProtocolMessage::keyboard_event(keycode, is_down).expect("keyboard event");
@@ -357,6 +360,185 @@ fn blit_rgb_to_frame(frame: &mut [u8], image: &DecodedImage) {
 }
 
 /// Maps a winit mouse button to its bit in the protocol button-state mask.
+/// Translates a winit physical [`KeyCode`] into a Win32 virtual-key code.
+///
+/// winit's `KeyCode` is a fieldless enum whose discriminant is a stable
+/// per-key identifier in USB HID usage order — it is *not* a Win32 VK code.
+/// The server injects input via `SendInput(wVk = ...)`, so the client must
+/// perform the HID-usage -> VK translation before the keycode crosses the
+/// wire. Keys that have no meaningful VK mapping (media extras, IME helpers,
+/// keyboard-usage gaps) return `None` and the event is skipped.
+fn winit_keycode_to_vk(code: KeyCode) -> Option<u16> {
+    use KeyCode::*;
+    Some(match code {
+        // Letters: VK_A..VK_Z (0x41..0x5A)
+        KeyA => 0x41,
+        KeyB => 0x42,
+        KeyC => 0x43,
+        KeyD => 0x44,
+        KeyE => 0x45,
+        KeyF => 0x46,
+        KeyG => 0x47,
+        KeyH => 0x48,
+        KeyI => 0x49,
+        KeyJ => 0x4A,
+        KeyK => 0x4B,
+        KeyL => 0x4C,
+        KeyM => 0x4D,
+        KeyN => 0x4E,
+        KeyO => 0x4F,
+        KeyP => 0x50,
+        KeyQ => 0x51,
+        KeyR => 0x52,
+        KeyS => 0x53,
+        KeyT => 0x54,
+        KeyU => 0x55,
+        KeyV => 0x56,
+        KeyW => 0x57,
+        KeyX => 0x58,
+        KeyY => 0x59,
+        KeyZ => 0x5A,
+        // Digits: VK_0..VK_9 (0x30..0x39)
+        Digit0 => 0x30,
+        Digit1 => 0x31,
+        Digit2 => 0x32,
+        Digit3 => 0x33,
+        Digit4 => 0x34,
+        Digit5 => 0x35,
+        Digit6 => 0x36,
+        Digit7 => 0x37,
+        Digit8 => 0x38,
+        Digit9 => 0x39,
+        // Numpad: VK_NUMPAD0..VK_NUMPAD9 (0x60..0x69)
+        Numpad0 => 0x60,
+        Numpad1 => 0x61,
+        Numpad2 => 0x62,
+        Numpad3 => 0x63,
+        Numpad4 => 0x64,
+        Numpad5 => 0x65,
+        Numpad6 => 0x66,
+        Numpad7 => 0x67,
+        Numpad8 => 0x68,
+        Numpad9 => 0x69,
+        NumpadAdd => 0x6B,
+        NumpadSubtract => 0x6D,
+        NumpadMultiply => 0x6A,
+        NumpadDivide => 0x6F,
+        NumpadDecimal => 0x6E,
+        NumpadEnter => 0x0D,
+        // Function keys: VK_F1..VK_F24 (0x70..0x87)
+        F1 => 0x70,
+        F2 => 0x71,
+        F3 => 0x72,
+        F4 => 0x73,
+        F5 => 0x74,
+        F6 => 0x75,
+        F7 => 0x76,
+        F8 => 0x77,
+        F9 => 0x78,
+        F10 => 0x79,
+        F11 => 0x7A,
+        F12 => 0x7B,
+        F13 => 0x7C,
+        F14 => 0x7D,
+        F15 => 0x7E,
+        F16 => 0x7F,
+        F17 => 0x80,
+        F18 => 0x81,
+        F19 => 0x82,
+        F20 => 0x83,
+        F21 => 0x84,
+        F22 => 0x85,
+        F23 => 0x86,
+        F24 => 0x87,
+        // Navigation / editing
+        Backspace => 0x08,
+        Tab => 0x09,
+        Enter => 0x0D,
+        Escape => 0x1B,
+        Space => 0x20,
+        Insert => 0x2D,
+        Delete => 0x2E,
+        Home => 0x24,
+        End => 0x23,
+        PageUp => 0x21,
+        PageDown => 0x22,
+        ArrowUp => 0x26,
+        ArrowDown => 0x28,
+        ArrowLeft => 0x25,
+        ArrowRight => 0x27,
+        CapsLock => 0x14,
+        PrintScreen => 0x2C,
+        ScrollLock => 0x91,
+        Pause => 0x13,
+        NumLock => 0x90,
+        // Modifiers (left/right specific where Windows distinguishes them)
+        ShiftLeft => 0xA0,
+        ShiftRight => 0xA1,
+        ControlLeft => 0xA2,
+        ControlRight => 0xA3,
+        AltLeft => 0xA4,
+        AltRight => 0xA5,
+        SuperLeft => 0x5B,
+        SuperRight => 0x5C,
+        ContextMenu => 0x5D,
+        // Punctuation (US layout OEM codes)
+        Backquote => 0xC0,
+        Minus => 0xBD,
+        Equal => 0xBB,
+        BracketLeft => 0xDB,
+        BracketRight => 0xDD,
+        Backslash => 0xDC,
+        Semicolon => 0xBA,
+        Quote => 0xDE,
+        Comma => 0xBC,
+        Period => 0xBE,
+        Slash => 0xBF,
+        IntlBackslash => 0xE2,
+        IntlRo => 0xE2,
+        IntlYen => 0xDC,
+        // IME keys
+        Convert => 0x1C,
+        NonConvert => 0x1D,
+        KanaMode => 0x15,
+        Lang1 => 0x15,
+        Lang2 => 0x19,
+        Hiragana => 0xF2,
+        Katakana => 0xF2,
+        // Browser / media keys
+        BrowserBack => 0xA6,
+        BrowserForward => 0xA7,
+        BrowserRefresh => 0xA8,
+        BrowserStop => 0xA9,
+        BrowserSearch => 0xAA,
+        BrowserFavorites => 0xAB,
+        BrowserHome => 0xAC,
+        AudioVolumeMute => 0xAD,
+        AudioVolumeDown => 0xAE,
+        AudioVolumeUp => 0xAF,
+        MediaTrackNext => 0xB0,
+        MediaTrackPrevious => 0xB1,
+        MediaStop => 0xB2,
+        MediaPlayPause => 0xB3,
+        LaunchMail => 0xB4,
+        MediaSelect => 0xB5,
+        LaunchApp1 => 0xB6,
+        LaunchApp2 => 0xB7,
+        Sleep => 0x5F,
+        // No VK equivalent (media extras, IME helpers, keyboard-usage gaps)
+        Fn | FnLock | Eject | Power | WakeUp | Meta | Hyper | Turbo | Abort | Resume | Suspend
+        | Again | Copy | Cut | Find | Open | Paste | Props | Select | Undo | NumpadBackspace
+        | NumpadClear | NumpadClearEntry | NumpadComma | NumpadEqual | NumpadHash
+        | NumpadMemoryAdd | NumpadMemoryClear | NumpadMemoryRecall | NumpadMemoryStore
+        | NumpadMemorySubtract | NumpadParenLeft | NumpadParenRight | NumpadStar | Lang3
+        | Lang4 | Lang5 | F25 | F26 | F27 | F28 | F29 | F30 | F31 | F32 | F33 | F34 | F35 => {
+            return None;
+        }
+        // Non-exhaustive enum: any future variant has no VK mapping.
+        _ => return None,
+    })
+}
+
 fn button_bit(button: MouseButton) -> Option<u8> {
     match button {
         MouseButton::Left => Some(0b001),
@@ -533,6 +715,71 @@ mod tests {
                 eprintln!("skipping clipboard test: clipboard unavailable ({e})");
                 None
             }
+        }
+    }
+
+    #[test]
+    fn test_winit_keycode_to_vk_maps_letters_digits_and_special_keys() {
+        // Letters and digits must map to their Win32 VK codes, not the winit
+        // enum discriminant (the original bug: KeyA was sent as 19 instead of
+        // 0x41).
+        assert_eq!(winit_keycode_to_vk(KeyCode::KeyA), Some(0x41));
+        assert_eq!(winit_keycode_to_vk(KeyCode::KeyZ), Some(0x5A));
+        assert_eq!(winit_keycode_to_vk(KeyCode::Digit0), Some(0x30));
+        assert_eq!(winit_keycode_to_vk(KeyCode::Digit9), Some(0x39));
+        assert_eq!(winit_keycode_to_vk(KeyCode::Numpad1), Some(0x61));
+        assert_eq!(winit_keycode_to_vk(KeyCode::F12), Some(0x7B));
+        assert_eq!(winit_keycode_to_vk(KeyCode::Enter), Some(0x0D));
+        assert_eq!(winit_keycode_to_vk(KeyCode::Space), Some(0x20));
+        assert_eq!(winit_keycode_to_vk(KeyCode::Escape), Some(0x1B));
+        assert_eq!(winit_keycode_to_vk(KeyCode::Tab), Some(0x09));
+        assert_eq!(winit_keycode_to_vk(KeyCode::ShiftLeft), Some(0xA0));
+        assert_eq!(winit_keycode_to_vk(KeyCode::ControlLeft), Some(0xA2));
+        assert_eq!(winit_keycode_to_vk(KeyCode::ArrowUp), Some(0x26));
+        assert_eq!(winit_keycode_to_vk(KeyCode::Backspace), Some(0x08));
+        assert_eq!(winit_keycode_to_vk(KeyCode::BracketLeft), Some(0xDB));
+        // Keys without a VK equivalent map to None and are skipped.
+        assert_eq!(winit_keycode_to_vk(KeyCode::Fn), None);
+        assert_eq!(winit_keycode_to_vk(KeyCode::Meta), None);
+        assert_eq!(winit_keycode_to_vk(KeyCode::F35), None);
+        assert_eq!(winit_keycode_to_vk(KeyCode::NumpadMemoryStore), None);
+    }
+
+    #[test]
+    fn test_winit_keycode_to_vk_covers_all_letter_and_digit_keys() {
+        // Spot-check the full A-Z / 0-9 / F1-F24 ranges are contiguous.
+        for (i, code) in [
+            KeyCode::KeyA,
+            KeyCode::KeyB,
+            KeyCode::KeyC,
+            KeyCode::KeyD,
+            KeyCode::KeyE,
+            KeyCode::KeyF,
+            KeyCode::KeyG,
+            KeyCode::KeyH,
+            KeyCode::KeyI,
+            KeyCode::KeyJ,
+            KeyCode::KeyK,
+            KeyCode::KeyL,
+            KeyCode::KeyM,
+            KeyCode::KeyN,
+            KeyCode::KeyO,
+            KeyCode::KeyP,
+            KeyCode::KeyQ,
+            KeyCode::KeyR,
+            KeyCode::KeyS,
+            KeyCode::KeyT,
+            KeyCode::KeyU,
+            KeyCode::KeyV,
+            KeyCode::KeyW,
+            KeyCode::KeyX,
+            KeyCode::KeyY,
+            KeyCode::KeyZ,
+        ]
+        .iter()
+        .enumerate()
+        {
+            assert_eq!(winit_keycode_to_vk(*code), Some(0x41 + i as u16));
         }
     }
 

@@ -4,6 +4,7 @@
 //! the `bw-server` binary uses at startup and that the E2E integration test
 //! (TASK-107) exercises against a recording injection backend.
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use bw_clipboard::{ClipboardImage, ClipboardManager};
@@ -13,7 +14,7 @@ use bw_protocol::dispatcher::{DispatchError, MessageDispatcher};
 use bw_protocol::message::{
     AudioPayload, ClipboardEvent, ClipboardFormat, KeyboardEvent, MessageType, MouseEvent,
 };
-use bw_protocol::routing::MessageEnvelope;
+use bw_protocol::routing::{MessageEnvelope, SessionId};
 
 /// Button-mask bits for the three standard mouse buttons.
 ///
@@ -29,9 +30,11 @@ pub const BUTTON_BITS: [(u8, MouseButton); 3] = [
 ///
 /// The keyboard handler injects key press/release events via
 /// [`InputInjector::inject_keyboard`]. The mouse handler injects relative
-/// movement via [`InputInjector::inject_mouse_move`] and presses any buttons
-/// set in the event's [`MouseEvent::buttons_mask`] mask (releases arrive as
-/// subsequent events with the corresponding bit cleared).
+/// movement via [`InputInjector::inject_mouse_move`] and translates button
+/// mask transitions into presses and releases via
+/// [`InputInjector::inject_mouse_click`]: a bit that appears in the mask is
+/// pressed, and a bit that disappears is released. Per-session state tracks
+/// the previous mask so releases are not lost.
 pub fn register_input_handlers(dispatcher: &MessageDispatcher, injector: InputInjector) {
     let keyboard_injector = injector.clone();
     dispatcher.register_handler(
@@ -45,6 +48,11 @@ pub fn register_input_handlers(dispatcher: &MessageDispatcher, injector: InputIn
     );
 
     let mouse_injector = injector.clone();
+    // Per-session button state so release transitions can be detected. The
+    // client reports the *current* mask on every event; pressing vs. releasing
+    // is a transition from bit-set to bit-clear, which requires remembering
+    // the previous mask for each session.
+    let button_states: Arc<Mutex<HashMap<SessionId, u8>>> = Arc::new(Mutex::new(HashMap::new()));
     dispatcher.register_handler(
         MessageType::InputMouse,
         Arc::new(move |envelope: MessageEnvelope| {
@@ -54,13 +62,26 @@ pub fn register_input_handlers(dispatcher: &MessageDispatcher, injector: InputIn
                     .inject_mouse_move(event.dx, event.dy)
                     .map_err(|e| DispatchError::Handler(e.to_string()))?;
             }
+            let mut states = button_states.lock().unwrap_or_else(|e| e.into_inner());
+            // Bound the map: a server keeps a small number of live sessions.
+            if states.len() >= 64 && !states.contains_key(&envelope.session_id) {
+                states.clear();
+            }
+            let prev_mask = *states.get(&envelope.session_id).unwrap_or(&0);
             for (bit, button) in BUTTON_BITS {
-                if event.buttons_mask & bit != 0 {
+                let was_down = prev_mask & bit != 0;
+                let is_down = event.buttons_mask & bit != 0;
+                if is_down && !was_down {
                     mouse_injector
                         .inject_mouse_click(button, true)
                         .map_err(|e| DispatchError::Handler(e.to_string()))?;
+                } else if !is_down && was_down {
+                    mouse_injector
+                        .inject_mouse_click(button, false)
+                        .map_err(|e| DispatchError::Handler(e.to_string()))?;
                 }
             }
+            states.insert(envelope.session_id, event.buttons_mask);
             Ok(())
         }),
     );

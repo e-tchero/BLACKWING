@@ -115,6 +115,127 @@ fn test_mouse_multi_button_mask_injects_all_pressed() {
 }
 
 #[test]
+fn test_mouse_release_injects_button_up() {
+    let (dispatcher, backend) = test_setup();
+
+    // Left button pressed (bit 0 set), then released (bit cleared).
+    dispatcher
+        .dispatch(wrap(ProtocolMessage::mouse_event(0, 0, 0b001).unwrap()))
+        .unwrap();
+    dispatcher
+        .dispatch(wrap(ProtocolMessage::mouse_event(0, 0, 0b000).unwrap()))
+        .unwrap();
+
+    assert_eq!(
+        backend.events(),
+        vec![
+            InjectedInput::MouseClick {
+                button: MouseButton::Left,
+                down: true
+            },
+            InjectedInput::MouseClick {
+                button: MouseButton::Left,
+                down: false
+            },
+        ]
+    );
+}
+
+#[test]
+fn test_mouse_motion_with_held_button_does_not_repress() {
+    let (dispatcher, backend) = test_setup();
+
+    // Press left, then move while holding (mask unchanged). The button must
+    // not be re-pressed on motion.
+    dispatcher
+        .dispatch(wrap(ProtocolMessage::mouse_event(0, 0, 0b001).unwrap()))
+        .unwrap();
+    dispatcher
+        .dispatch(wrap(ProtocolMessage::mouse_event(50, 30, 0b001).unwrap()))
+        .unwrap();
+
+    assert_eq!(
+        backend.events(),
+        vec![
+            InjectedInput::MouseClick {
+                button: MouseButton::Left,
+                down: true
+            },
+            InjectedInput::MouseMove { dx: 50, dy: 30 },
+        ]
+    );
+}
+
+#[test]
+fn test_multi_button_press_then_partial_release() {
+    let (dispatcher, backend) = test_setup();
+
+    // Left + right down, then right released (mask 0b011 -> 0b001).
+    dispatcher
+        .dispatch(wrap(ProtocolMessage::mouse_event(0, 0, 0b011).unwrap()))
+        .unwrap();
+    dispatcher
+        .dispatch(wrap(ProtocolMessage::mouse_event(0, 0, 0b001).unwrap()))
+        .unwrap();
+
+    assert_eq!(
+        backend.events(),
+        vec![
+            InjectedInput::MouseClick {
+                button: MouseButton::Left,
+                down: true
+            },
+            InjectedInput::MouseClick {
+                button: MouseButton::Right,
+                down: true
+            },
+            InjectedInput::MouseClick {
+                button: MouseButton::Right,
+                down: false
+            },
+        ]
+    );
+}
+
+#[test]
+fn test_mouse_state_isolated_per_session() {
+    let (dispatcher, backend) = test_setup();
+
+    // Session A holds left; session B presses right only. B's state must not
+    // leak into A's transition tracking.
+    let mut a = wrap(ProtocolMessage::mouse_event(0, 0, 0b001).unwrap());
+    let mut b = wrap(ProtocolMessage::mouse_event(0, 0, 0b010).unwrap());
+    a.session_id = SessionId([1u8; 16]);
+    b.session_id = SessionId([2u8; 16]);
+
+    dispatcher.dispatch(a).unwrap();
+    dispatcher.dispatch(b).unwrap();
+    let mut a_release = wrap(ProtocolMessage::mouse_event(0, 0, 0b000).unwrap());
+    a_release.session_id = SessionId([1u8; 16]);
+    dispatcher.dispatch(a_release).unwrap();
+
+    // Session A's left release is detected even though session B pressed
+    // right in between.
+    assert_eq!(
+        backend.events(),
+        vec![
+            InjectedInput::MouseClick {
+                button: MouseButton::Left,
+                down: true
+            },
+            InjectedInput::MouseClick {
+                button: MouseButton::Right,
+                down: true
+            },
+            InjectedInput::MouseClick {
+                button: MouseButton::Left,
+                down: false
+            },
+        ]
+    );
+}
+
+#[test]
 fn test_undecodable_input_payload_reports_handler_error() {
     let (dispatcher, backend) = test_setup();
 
