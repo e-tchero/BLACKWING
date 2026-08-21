@@ -613,9 +613,9 @@ async fn run_session(
 
     // Clipboard pipeline: poll local clipboard and send changes to the server.
     let (clipboard_tx, mut clipboard_rx) = tokio::sync::mpsc::channel::<ProtocolMessage>(16);
-    {
+    let clipboard_poll_handle = {
         let clipboard_tx = clipboard_tx.clone();
-        let _handle = bw_clipboard::ClipboardPoller::default_intervals().spawn(move |change| {
+        bw_clipboard::ClipboardPoller::default_intervals().spawn(move |change| {
             let event = bw_protocol::message::ClipboardEvent {
                 format: if change.is_text {
                     bw_protocol::message::ClipboardFormat::Text
@@ -634,10 +634,10 @@ async fn run_session(
             if let Ok(message) = ProtocolMessage::clipboard_event(event) {
                 let _ = clipboard_tx.blocking_send(message);
             }
-        });
-        if let Err(e) = _handle {
-            eprintln!("warning: clipboard poller failed to start: {e}");
-        }
+        })
+    };
+    if let Err(e) = clipboard_poll_handle {
+        eprintln!("warning: clipboard poller failed to start: {e}");
     }
 
     // Receiver task: decode video frames into the display channel and route
