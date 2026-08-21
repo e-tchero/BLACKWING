@@ -219,10 +219,6 @@ impl ApplicationHandler for App {
                     return;
                 }
                 if let PhysicalKey::Code(code) = event.physical_key {
-                    // winit's `KeyCode` discriminant is NOT a Win32 virtual-key
-                    // code, so translate it before sending (see
-                    // `winit_keycode_to_vk`). Keys without a VK mapping are
-                    // skipped.
                     let Some(keycode) = winit_keycode_to_vk(code) else {
                         return;
                     };
@@ -615,6 +611,35 @@ async fn run_session(
 
     let (mut sender, mut receiver) = session.into_split();
 
+    // Clipboard pipeline: poll local clipboard and send changes to the server.
+    let (clipboard_tx, mut clipboard_rx) = tokio::sync::mpsc::channel::<ProtocolMessage>(16);
+    {
+        let clipboard_tx = clipboard_tx.clone();
+        let _handle = bw_clipboard::ClipboardPoller::default_intervals().spawn(move |change| {
+            let event = bw_protocol::message::ClipboardEvent {
+                format: if change.is_text {
+                    bw_protocol::message::ClipboardFormat::Text
+                } else {
+                    bw_protocol::message::ClipboardFormat::ImageRgba8 {
+                        width: change.image_width.unwrap_or(0),
+                        height: change.image_height.unwrap_or(0),
+                    }
+                },
+                data: if change.is_text {
+                    change.text.unwrap_or_default().into_bytes()
+                } else {
+                    change.image_data.unwrap_or_default()
+                },
+            };
+            if let Ok(message) = ProtocolMessage::clipboard_event(event) {
+                let _ = clipboard_tx.blocking_send(message);
+            }
+        });
+        if let Err(e) = _handle {
+            eprintln!("warning: clipboard poller failed to start: {e}");
+        }
+    }
+
     // Receiver task: decode video frames into the display channel and route
     // control messages (clipboard/audio) to the dispatcher.
     let frame_tx = frame_tx.clone();
@@ -666,8 +691,18 @@ async fn run_session(
         }
     });
 
-    // Forward captured input to the server until the connection drops.
-    while let Some(message) = input_rx.recv().await {
+    // Forward captured input and clipboard changes to the server.
+    loop {
+        let message = tokio::select! {
+            msg = input_rx.recv() => match msg {
+                Some(m) => m,
+                None => break,
+            },
+            msg = clipboard_rx.recv() => match msg {
+                Some(m) => m,
+                None => continue, // poller dropped — keep input alive
+            },
+        };
         if sender.send_message(&message).await.is_err() {
             break;
         }

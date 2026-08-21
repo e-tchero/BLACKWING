@@ -211,7 +211,10 @@ async fn handle_session(
     spawn_video_pipeline(out_tx.clone());
 
     // Audio pipeline: capture host output and queue AudioData messages.
-    spawn_audio_pipeline(out_tx);
+    spawn_audio_pipeline(out_tx.clone());
+
+    // Clipboard pipeline: poll local clipboard and send changes to the client.
+    bw_server::spawn_clipboard_poller(out_tx);
 
     // Receiver loop: dispatch inbound control messages (input, clipboard).
     loop {

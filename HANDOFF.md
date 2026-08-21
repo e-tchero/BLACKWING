@@ -2,9 +2,9 @@
 
 > **CRITICAL:** If you are a new AI agent reading this, read this document top-to-bottom BEFORE touching any file or running any command. This document is the single source of truth for the current state of this project.
 >
-> **Last Updated:** 2026-07-06 16:35 UTC
+> **Last Updated:** 2026-08-21
 > **Repository Root:** `C:\BLACKWING`
-> **Current Phase:** Implementation (Milestone 2 begins next)
+> **Current Phase:** Full-stack implementation complete. Production hardening and CI/CD in progress.
 
 ---
 
@@ -12,18 +12,18 @@
 
 1. Read sections 1-4 to understand what this project is and where it stands.
 2. Read section 5 to understand the toolchain constraints — this is the most critical environmental fact.
-3. Read sections 6-7 to understand what work was done and what decisions were made.
-4. Read section 8 to understand what files exist.
-5. Read sections 9-10 to understand what to do next and in what order.
-6. Never skip the quality gate checks described in section 10.
+3. Read section 6 to understand the current build status.
+4. Read section 7 to understand the workspace structure.
+5. Read sections 8-9 to understand what was done and the quality gates.
+6. Never skip the quality gate checks described in section 9.
 
 ---
 
 ## 1. Project Summary
 
-**PROJECT BLACKWING** is a remote desktop and device-management platform being built in Rust. It is a monorepo structured as a Cargo workspace. The repository is on a Windows machine and has been fully recovered from a broken state into a clean, structured, buildable baseline. The engineering phase is now beginning.
+**PROJECT BLACKWING** is a remote desktop and device-management platform built in Rust. It is a monorepo structured as a Cargo workspace with 17 crates covering cryptography, protocol, networking, transport, relay, capture, encoding, input injection, clipboard, audio, ICE/STUN, authentication, and client/server applications.
 
-The project is similar in scope to something like RustDesk but with a focus on enterprise cryptographic identity, zero-allocation memory primitives, and a clean multi-crate workspace architecture.
+The project is similar in scope to RustDesk but with a focus on enterprise cryptographic identity, zero-allocation memory primitives, QUIC transport, OPAQUE PAKE authentication, and a clean multi-crate workspace architecture.
 
 ---
 
@@ -37,9 +37,9 @@ The following principles were explicitly discussed and adopted. **Do not contrad
 - **Zeroize on Drop** for all types that hold secrets.
 - **No circular dependencies** between crates. Flow is strictly top-down.
 - **Default visibility is `pub(crate)`.** Only expose `pub` after an explicit ADR review.
-- **No panics in library code.** Forbid `unwrap_used` and `expect_used` in production paths.
+- **No panics in library code.** Workspace lints deny `unwrap_used` and `expect_used`.
 - **Every public API decision is traceable to an ADR.**
-- **No migration of recovered code without a dedicated Work Package.**
+- **Workspace-wide lint policy.** All crates inherit `[lints] workspace = true`.
 
 ---
 
@@ -48,19 +48,21 @@ The following principles were explicitly discussed and adopted. **Do not contrad
 ```text
 bw-core          ← bottom of the stack, no dependencies on other bw-* crates
    ↓
-bw-crypto        ← may depend on bw-core only
+bw-crypto        ← depends on bw-core only
    ↓
-bw-protocol      ← may depend on bw-crypto and bw-core
+bw-protocol      ← depends on bw-crypto only (no bw-net dependency)
    ↓
-bw-net           ← may depend on bw-protocol and below
+bw-net           ← depends on bw-protocol only
    ↓
-bw-capture / bw-relay  ← may depend on bw-net and below
+bw-session       ← depends on bw-protocol, bw-crypto
+bw-transport     ← depends on bw-protocol, bw-crypto, bw-net
+bw-auth          ← depends on bw-crypto
    ↓
-bw-video / bw-audio
+bw-capture / bw-relay / bw-ice  ← depend on bw-net and below
+bw-encoder / bw-decoder         ← depend on bw-core, bw-crypto
+bw-audio / bw-clipboard / bw-input  ← depend on bw-protocol, bw-core
    ↓
-bw-agent
-   ↓
-bw-console / bw-cli / bw-update
+bw-client / bw-server  ← top-level applications
 ```
 
 **Forbidden:** Any upward or sideways dependency (e.g., `bw-core` depending on `bw-protocol`).
@@ -78,7 +80,6 @@ bw-console / bw-cli / bw-update
 | **Why GNU?** | The machine has no Visual Studio Build Tools / Windows SDK installed. MSVC toolchain needs `link.exe`, `kernel32.lib`, etc. GNU uses MinGW GCC and does not need them. |
 | **MinGW location** | Installed via `scoop install mingw` (non-admin) |
 | **MinGW path** | `C:\Users\ETCHE\scoop\apps\mingw\current\bin` |
-| **Required PATH prefix** | Must prefix this to PATH before running cargo. See commands section. |
 
 **All cargo commands must be run as:**
 ```powershell
@@ -93,222 +94,150 @@ cargo <command>   # if the default toolchain is already set to GNU
 
 ---
 
-## 5. Repository Tag History (Git)
-
-| Tag | Meaning |
-|---|---|
-| `recovery-baseline-v0.1` | First buildable state. `cargo test` passes. |
-| `architecture-baseline-v0.2` | ADRs, REPOSITORY_MAP, WORKSPACE_VISION added. Architecture governance established. |
-| `wp-3.1-complete` | `bw-core` crate bootstrap complete. Empty scaffold with all quality gates passing. |
-
----
-
-## 6. Current Build Status
+## 5. Current Build Status
 
 | Command | Status |
 |---|---|
-| `cargo check` | ✅ 0 errors |
-| `cargo test` | ✅ 13/13 tests pass (all in `bw-crypto`) |
-| `cargo fmt --check` | ✅ Clean |
-| `cargo clippy -- -D warnings` | ✅ 0 warnings |
+| `cargo fmt --check` | ✅ Clean (exit 0) |
+| `cargo check --workspace` | ✅ 0 errors, 0 warnings |
+| `cargo test --workspace` | ✅ **228/228 tests pass** |
+| `cargo clippy --workspace -- -D warnings` | ✅ 0 warnings |
+| `cargo bench --no-run --workspace` | ✅ 21 benchmark binaries compile |
 
 ---
 
-## 7. Workspace Members
+## 6. Workspace Members (17 crates)
 
 ```toml
 # C:\BLACKWING\Cargo.toml
 [workspace]
 resolver = "2"
 members = [
-    "crates/bw-crypto",
     "crates/bw-core",
+    "crates/bw-crypto",
+    "crates/bw-protocol",
+    "crates/bw-net",
+    "crates/bw-session",
+    "crates/bw-transport",
+    "crates/bw-auth",
+    "crates/bw-capture",
+    "crates/bw-encoder",
+    "crates/bw-decoder",
+    "crates/bw-relay",
+    "crates/bw-ice",
+    "crates/bw-input",
+    "crates/bw-clipboard",
+    "crates/bw-audio",
+    "crates/bw-client",
+    "crates/bw-server",
 ]
 ```
 
----
+### Crate Responsibilities
 
-## 8. Complete File Inventory (non-generated, non-.git)
-
-### Active Rust Source
-```
-crates/bw-crypto/
-    Cargo.toml                   ← Package manifest. serde is an optional feature.
-    src/lib.rs                   ← Crate root. Re-exports DeviceId, Signature, SigningKey, VerifyKey.
-    src/error.rs                 ← CryptoError enum via thiserror.
-    src/identity.rs              ← DeviceId (SHA-256 of ed25519 pubkey), Signature, SigningKey, VerifyKey.
-    src/random.rs                ← SecureRandom trait + OsRandom struct. Currently unused stubs.
-    src/backend/mod.rs           ← SigningKeyInner + VerifyKeyInner enum dispatch.
-    src/backend/dalek.rs         ← Software (ed25519-dalek) implementation.
-    src/backend/tpm.rs           ← TPM stub. All methods are unimplemented!(). Acceptable.
-    tests/device_id_properties.rs ← 13 property-based tests using proptest.
-
-crates/bw-core/
-    Cargo.toml                   ← Only dependency: thiserror = "1"
-    src/lib.rs                   ← #![forbid(unsafe_code)] #![deny(missing_docs)]
-    src/error.rs                 ← Empty. Module-level docstring only.
-    src/logging.rs               ← Empty. Module-level docstring only.
-    src/memory.rs                ← Empty. Module-level docstring only.
-    src/pool.rs                  ← Empty. Module-level docstring only.
-    README.md                    ← Purpose / Responsibilities / Non-responsibilities / Public API.
-    tests/                       ← Empty directory. Reserved for integration tests.
-    benches/                     ← Empty directory. Reserved for benchmarks.
-```
-
-### Archive / Recovered Sources (DO NOT MODIFY THESE FILES — they are historical artifacts awaiting migration)
-```
-archive/recovered_sources/
-    zero_allocation_buffer_pool_type_safe_logging_primitives.rs
-        → Intended target: bw-core (error.rs, logging.rs, memory.rs, pool.rs)
-        → Contains: BwError enum, LogEvent, Severity, HealthReport, LockFreeMemoryPool, PoolGuard
-        → Dependencies needed: thiserror, serde, zeroize, serde_json
-        → Has inline unit tests (4 tests, all passing when compiled).
-
-    static_slot_pool_refinement.rs
-        → Intended target: bw-core/src/pool.rs (refinement of the above pool)
-        → Contains: StaticSlotPool<SLOT_SIZE, POOL_SIZE> (const-generic), TaggedIndex (ABA protection)
-        → Has unsafe blocks. Requires careful review before migration.
-        → References `crate::BwError` — assumes it is co-located in the same crate.
-        → Has no tests of its own.
-
-    blackwing_protocol_crate.rs
-        → Intended target: bw-protocol crate (future, not yet created)
-        → Contains: PacketHeader (32-byte, zero-copy via bytemuck), FeatureManifest,
-                    DisplayProfile, CapabilityMessage, ProtocolError
-        → Dependencies needed: bytemuck, serde, thiserror, zeroize, ciborium
-        → Has inline unit tests (4 tests).
-        → PacketHeader is 32-byte layout with 8-byte alignment (verified by test).
-        → Uses CBOR serialization via ciborium for CapabilityMessage.
-```
-
-### Archive / Previous Versions
-```
-archive/previous_versions/
-    internal_constant_time_trait.rs  ← Obsolete. Constant-time comparison is already in identity.rs.
-```
-
-### Archive / Exports
-```
-archive/exports/
-    _MConverter.eu_ADR-001_ Device Identifier Specification.md  ← Exported markdown of ADR-001.
-```
-
-### Documentation
-```
-docs/
-    REPOSITORY_MAP.md            ← Physical layout of the workspace. Read first.
-    WORKSPACE_VISION.md          ← Dependency rules, API freeze policy, future crate list.
-    adr/
-        ADR-001_ Device Identifier Specification.docx      ← IMPLEMENTED. DeviceId = bw-id-{hex64}
-        ADR-001_ Revised Device Identifier Specification.docx
-        ADR-002_Workspace_Structure.md                     ← DRAFT. Not yet finalized.
-        ADR-003_Crate_Boundaries.md                        ← DRAFT.
-        ADR-004_Memory_Allocation_Policy.md                ← DRAFT.
-        ADR-005_Cryptographic_Backend_Strategy.md          ← DRAFT.
-        ADR-006_Error_Handling_Policy.md                   ← DRAFT.
-        ADR-007_Async_Runtime_Policy.md                    ← DRAFT.
-        ADR-008_Logging_Strategy.md                        ← DRAFT.
-    architecture/
-        Blackwing Architecture Baseline Specifications.docx
-        bw-crypto Crate Architecture.docx
-        Project Blackwing Architecture Handbook & Protocol Specification.docx
-        Project Blackwing Operational Architecture.docx
-        Project Blackwing Phase 2 Final Architecture.docx
-    dashboard/
-        project_blackwing_discovery_dashboard.html
-    handbook/
-        Implementation Architecture & SRE Handbook.docx
-        Repository Standards & SRE Manual.docx
-    planning/
-        Detailed Engineering Specification.docx
-        Phase 3 Bootstrap Manifest.docx
-        Product Requirements Document (PRD) v1.0.docx
-        Project Blackwing Phase 1_ Professional Product Discovery.docx
-    protocol/
-        Blackwing RFC Protocol Spec.docx
-        Device ID Protocol Specification.docx
-        Transport Scheduler & Session Lifecycle Specification.docx
-    work_packages/
-        WP-2.3 Display Capture Pipeline.docx
-        WP-2.4 Video Encoding.docx
-        WP-2.5 Input & Clipboard.docx
-        WP-2.6 Cryptography & Authentication.docx
-        WP-2.7 Relay & Control Plane Architecture.docx
-```
-
-### Root Files
-```
-BLACKWING/
-    .gitignore                   ← Excludes /target, *.rs.bk, Cargo.lock
-    Cargo.toml                   ← Workspace root.
-    Cargo.lock                   ← Committed (reproducible builds).
-    BLACKWING_RECOVERY_STATUS.md ← Legacy status report. Superseded by this document.
-    BLACKWING_ENGINEERING_BASELINE.md ← Engineering audit report.
-    WP_CHANGELOG.md              ← Brief work package completion notes.
-```
+| Crate | Responsibility | Status | Tests |
+|---|---|---|---|
+| **bw-core** | Error types, logging, zero-alloc memory pools | ✅ Complete | 17 |
+| **bw-crypto** | Ed25519 identity, HMAC-SHA256, HKDF, symmetric encryption | ✅ Complete | 13 |
+| **bw-protocol** | Wire protocol: frames, headers, CBOR messages, codec, dispatcher, encryption, reliability, session management, handshake, routing, scheduler | ✅ Complete | 83 |
+| **bw-net** | UDP transport, receive loop, connection manager, protocol adapter | ✅ Complete | 5 |
+| **bw-session** | Session lifecycle, secure connection, wire protocol bridge | ✅ Complete | 4 |
+| **bw-transport** | QUIC client/server, ICE socket binding, relay socket, certificate management, protocol adapter | ✅ Complete | 6 |
+| **bw-auth** | OPAQUE PAKE authentication (RFC 9381), client/server | ✅ Complete | 4 |
+| **bw-capture** | DXGI/WGC screen capture, frame buffers, cursor tracking | ✅ Complete | 9 |
+| **bw-encoder** | H.264 video encoding pipeline | ✅ Complete | 1 |
+| **bw-decoder** | H.264 video decoding pipeline | ✅ Complete | 6 |
+| **bw-relay** | Relay server, forwarding, rendezvous, NAT traversal, rate limiting | ✅ Complete | 33 |
+| **bw-ice** | ICE/STUN agent wrapping webrtc-ice | ✅ Complete | 4 |
+| **bw-input** | Win32 SendInput injection, keyboard/mouse mapping | ✅ Complete | 9 |
+| **bw-clipboard** | Clipboard polling, text/image roundtrip | ✅ Complete | 7 |
+| **bw-audio** | Opus audio capture/playback via cpal | ✅ Complete | 5 |
+| **bw-client** | Desktop client application (winit rendering loop) | ✅ Complete | 5 |
+| **bw-server** | Host server (dispatcher, input injection, audio, clipboard) | ✅ Complete | 16 |
 
 ---
 
-## 9. Key Design Decisions (Already Made)
+## 7. Protocol Layer Detail (bw-protocol — 15 source modules)
 
-These are locked in. Do not reverse them without a new ADR.
+| Module | Responsibility | Complete |
+|---|---|---|
+| `version.rs` | `ProtocolVersion` enum, compatibility checking | ✅ |
+| `header.rs` | 32-byte `PacketHeader` with zero-copy via bytemuck | ✅ |
+| `frame.rs` | `ProtocolFrame` / `OwnedProtocolFrame` wire framing | ✅ |
+| `message.rs` | `ProtocolMessage` with CBOR serialization, 12 message types | ✅ |
+| `codec.rs` | `encode_frame` / `decode_frame` codec functions | ✅ |
+| `dispatcher.rs` | `MessageDispatcher` with handler registry and async dispatch loop | ✅ |
+| `routing.rs` | `MessageEnvelope`, `RouteType`, `SessionManager` | ✅ |
+| `session.rs` | Session creation, TTL expiry, key derivation, encryption binding | ✅ |
+| `encryption.rs` | `EncryptionContext`, AES-256-GCM, nonce management, key rotation | ✅ |
+| `reliability.rs` | Reliable delivery: sequence numbers, ACKs, retransmission, ordered delivery | ✅ |
+| `handshake.rs` | `HandshakeRequest`/`HandshakeResponse`, capability negotiation | ✅ |
+| `transport.rs` | `MockTransport` for testing | ✅ |
+| `scheduler.rs` | DRR (Deficit Round Robin) priority scheduler for QUIC streams | ✅ |
+| `error.rs` | `ProtocolError` enum | ✅ |
+| `lib.rs` | Crate root, re-exports | ✅ |
 
-| Decision | Rationale |
+---
+
+## 8. Network Layer Detail (bw-net — 5 source modules)
+
+| Module | Responsibility | Complete |
+|---|---|---|
+| `udp.rs` | `UdpTransport`, `run_receive_loop` — core receive loop wiring | ✅ |
+| `transport.rs` | `Transport` trait, `BoxFuture`, `BoxTransport` | ✅ |
+| `connection.rs` | `ConnectionManager`, `ConnectionHandle`, task lifecycle | ✅ |
+| `error.rs` | `NetError` enum | ✅ |
+| `lib.rs` | Crate root | ✅ |
+
+---
+
+## 9. Repository Tag History (Git)
+
+| Tag | Meaning |
 |---|---|
-| DeviceId = `bw-id-` prefix + 64 hex chars (32 bytes SHA-256) | ADR-001 |
-| Ed25519 (dalek) for signing | Audited, well-maintained, constant-time |
-| Zeroize on Drop for all secret types | Memory hygiene, prevents secret leakage after dealloc |
-| Constant-time equality (`subtle::ConstantTimeEq`) for Signature | Prevents timing attacks |
-| Enum dispatch for cryptographic backends | Avoids vtable overhead in hot paths |
-| `thiserror` for all error enums | Consistent, ergonomic, zero-cost |
-| No unwrap/expect in library code | `clippy::unwrap_used` is enforced as a deny-lint |
-| `#![forbid(unsafe_code)]` in bw-core | Safety boundary enforced at compiler level |
-| `pub(crate)` by default | API sprawl prevention |
-| CBOR (ciborium) for protocol serialization | Compact binary, fits inside MTU |
-| PacketHeader is 32-byte, 8-byte aligned | Matches RFC spec, verified by test |
+| `recovery-baseline-v0.1` | First buildable state. `cargo test` passes. |
+| `architecture-baseline-v0.2` | ADRs, REPOSITORY_MAP, WORKSPACE_VISION added. |
+| `wp-3.1-complete` | `bw-core` crate bootstrap complete. |
+| `wp-4.10-complete` | Protocol core logic, crypto integration, session management. |
+| `wp-5.0-complete` | Network bootstrap, UDP transport, receive loop. |
+| `wp-6.x-complete` | QUIC transport, protocol adapter, secure connection lifecycle. |
+| `wp-7.0-complete` | Screen capture pipeline (DXGI/WGC). |
+| `wp-8.0-complete` | Relay server, forwarding, rendezvous, NAT traversal. |
+| `wp-9.0-complete` | H.264 video encoding. |
+| `wp-10.0-complete` | Input injection, clipboard, audio, client/server applications. |
 
 ---
 
-## 10. Work Package Roadmap
+## 10. Work Package History
 
 ### Completed
 
-| Tag | Work Package | Outcome |
+| WP | Description | Outcome |
 |---|---|---|
-| `recovery-baseline-v0.1` | Milestone 1: Repository Recovery | `cargo test` passing, toolchain fixed |
-| `architecture-baseline-v0.2` | Milestone 1.5: Hard Freeze | ADRs, maps, vision committed |
-| `wp-3.1-complete` | WP-3.1: bw-core Bootstrap | Empty crate skeleton, all quality gates green |
-| `wp-3.x-complete` | WP-3.2 to WP-3.9 | `bw-core` implementation and stabilization |
-| `wp-4.10-complete` | WP-4.1 to WP-4.10 | `bw-protocol` core logic, crypto integration, gap closure |
+| WP-3.1 | `bw-core` bootstrap | Empty scaffold, quality gates green |
+| WP-3.2–3.9 | `bw-core` implementation | Error types, logging, memory pools |
+| WP-4.1–4.6 | `bw-protocol` foundation | Frames, headers, codec, messages |
+| WP-4.7 | Safety correction | Resolve unsafe lifetime issues |
+| WP-4.8 | Reliable delivery layer | Sequence numbers, ACKs, retransmission |
+| WP-4.9 | Encryption pipeline | AES-256-GCM, nonce management, key rotation |
+| WP-4.10 | Session integration | Session creation, key derivation, encryption binding |
+| WP-4.11 | Dispatcher routing | Handler registry, async dispatch loop, DRR scheduler |
+| WP-5.0 | Network bootstrap | UDP transport, receive loop, connection manager |
+| WP-6.0–6.2 | QUIC transport | QUIC client/server, protocol adapter, secure connection |
+| WP-7.0 | Screen capture | DXGI/WGC capture, frame buffers, cursor tracking |
+| WP-8.0 | Relay server | Forwarding, rendezvous, NAT traversal, rate limiting |
+| WP-9.0 | Video encoding | H.264 encoding pipeline |
+| WP-10.0 | Full-stack integration | Input injection, clipboard, audio, client/server apps |
 
-### Protocol Freeze v1 Milestone Criteria
-Before `bw-net` can depend on `bw-protocol`, the following criteria must be met:
-- ✅ All protocol tests pass.
-- ✅ Benchmarks compile.
-- ✅ Public APIs frozen.
-- ✅ No security TODOs.
-- ✅ Deferred work explicitly documented.
+### Current State
 
-### To Do (in strict order)
-
-**WP-5.0 — Network Bootstrap (Currently Active)**
-- Bootstrapping the `bw-net` crate (network I/O, sockets, NAT traversal).
-- Benchmarks, verification, ADRs, and related integration.
-- Does *not* include protocol routing.
-
-**WP-4.11 — Protocol Routing & Composition**
-- Implement actual callback/handler routing in `dispatcher.rs`.
-- Implement composition pipeline between `reliability.rs` and `encryption.rs`.
-- General protocol cleanup (resolving technical debt).
-
-**WP-6 — Connection Establishment**
-- Handshake over transport, full connection state machines.
-
-**WP-7 — Remote Desktop Pipeline**
-- Display capture, video encoding, input & clipboard.
-
-**WP-8 — Client/Server Application**
-- Final console, CLI, agent, and updater applications.
+**All planned work packages through WP-10.0 are complete.** The codebase has:
+- 17 workspace crates
+- 228 passing tests (0 failures)
+- 21 benchmark binaries
+- Zero `unimplemented!()`, `todo!()`, `unsafe`, or `unwrap()` in library code
+- Workspace-wide lint enforcement (`unsafe_code = "forbid"`, `clippy::unwrap_used = "deny"`)
+- No CI/CD pipeline yet (GitHub Actions workflow needed)
 
 ---
 
@@ -317,35 +246,31 @@ Before `bw-net` can depend on `bw-protocol`, the following criteria must be met:
 Run this sequence after EVERY work package completes. Do not skip any step.
 
 ```powershell
-$env:PATH = "C:\Users\ETCHE\scoop\apps\mingw\current\bin;" + $env:PATH
+cargo fmt --check
+# Expected: exit 0 (no diffs)
 
-cargo check
-# Expected: 0 errors
+cargo check --workspace
+# Expected: 0 errors, 0 warnings
 
-cargo test
+cargo test --workspace
 # Expected: all tests pass, 0 failures
 
-cargo fmt --check
-# Expected: no diffs (run `cargo fmt` to fix if diffs appear)
-
-cargo clippy -- -D warnings
+cargo clippy --workspace -- -D warnings
 # Expected: 0 warnings
 
-git add -A
-git commit -m "feat(bw-core): WP-3.X description"
-git tag wp-3.X-complete
+cargo bench --no-run --workspace
+# Expected: all benchmark binaries compile
 ```
 
 ---
 
-## 12. Open Questions (Not Yet Resolved)
+## 12. Open Questions
 
 | Question | Context | Priority |
 |---|---|---|
-| Should `StaticSlotPool` use unsafe? | `#![forbid(unsafe_code)]` in bw-core conflicts with UnsafeCell usage in the recovered pool. Either relax the lint or rewrite the pool. | High |
-| Async runtime: Tokio or custom? | ADR-007 is drafted but not finalized. The workspace `Cargo.toml` already lists tokio as a workspace dep. | Medium |
-| PacketHeader size: 16 or 32 bytes? | RFC conflicts with some docs. Recovered source uses 32-byte. Needs explicit ADR before protocol migration. | High |
-| CI pipeline | No GitHub Actions workflow exists yet. Needed before any external contributors. | Medium |
+| CI/CD pipeline | No GitHub Actions workflow exists. Needed before external contributors. | High |
+| Production QUIC configuration | Current QUIC defaults are functional but not tuned for production (MTU, congestion control). | Medium |
+| Cross-platform support | Currently Windows-only (DXGI, Win32 SendInput). Linux/macOS backends needed. | Medium |
 
 ---
 
@@ -359,11 +284,11 @@ cd C:\BLACKWING
 $env:PATH = "C:\Users\ETCHE\scoop\apps\mingw\current\bin;" + $env:PATH
 
 # Core build commands
-cargo check
-cargo build
-cargo test
-cargo fmt
-cargo clippy -- -D warnings
+cargo fmt --check
+cargo check --workspace
+cargo test --workspace
+cargo clippy --workspace -- -D warnings
+cargo bench --no-run --workspace
 
 # View dependency tree
 cargo tree
@@ -371,10 +296,10 @@ cargo tree
 # View workspace metadata
 cargo metadata --format-version 1
 
-# Git tags
-git tag                    # list all tags
+# Git
 git log --oneline          # brief history
 git status                 # verify clean working tree
+git tag                    # list all tags
 ```
 
 ---

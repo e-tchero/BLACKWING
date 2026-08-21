@@ -9,6 +9,8 @@
 
 pub mod error;
 pub mod manager;
+pub mod poller;
 
 pub use error::ClipboardError;
 pub use manager::{ClipboardImage, ClipboardManager};
+pub use poller::{ClipboardChange, ClipboardPollHandle, ClipboardPoller};

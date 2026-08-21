@@ -188,3 +188,44 @@ pub fn register_ice_handler(dispatcher: &MessageDispatcher, peer: Arc<IcePeer>) 
         }),
     );
 }
+
+/// Spawns a clipboard polling thread that detects local clipboard changes
+/// and sends them as [`ClipboardData`] messages to the client.
+///
+/// Uses [`bw_clipboard::ClipboardPoller`] to detect text/image changes on a
+/// background thread, then bridges into the async [`tokio::sync::mpsc`]
+/// channel via a [`std::sync::mpsc`] relay.
+pub fn spawn_clipboard_poller(
+    out_tx: tokio::sync::mpsc::Sender<bw_protocol::message::ProtocolMessage>,
+) {
+    let poller = bw_clipboard::ClipboardPoller::default_intervals();
+    let _handle = poller.spawn(move |change| {
+        let event = bw_protocol::message::ClipboardEvent {
+            format: if change.is_text {
+                bw_protocol::message::ClipboardFormat::Text
+            } else {
+                bw_protocol::message::ClipboardFormat::ImageRgba8 {
+                    width: change.image_width.unwrap_or(0),
+                    height: change.image_height.unwrap_or(0),
+                }
+            },
+            data: if change.is_text {
+                change.text.unwrap_or_default().into_bytes()
+            } else {
+                change.image_data.unwrap_or_default()
+            },
+        };
+        match bw_protocol::message::ProtocolMessage::clipboard_event(event) {
+            Ok(message) => {
+                // out_tx is a tokio channel — use blocking_send from the sync thread.
+                if out_tx.blocking_send(message).is_err() {
+                    // Session closed — poller will stop when the handle is dropped.
+                }
+            }
+            Err(e) => eprintln!("clipboard poller: serialization failed: {e}"),
+        }
+    });
+    if let Err(e) = _handle {
+        eprintln!("warning: failed to start clipboard poller: {e}");
+    }
+}
