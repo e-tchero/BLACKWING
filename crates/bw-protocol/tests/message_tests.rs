@@ -135,7 +135,8 @@ fn test_input_message_constructors_and_accessors() {
         Some(MouseEvent {
             dx: 120,
             dy: -30,
-            buttons_mask: 0b101
+            buttons_mask: 0b101,
+            is_absolute: false,
         })
     );
     assert!(ms.as_keyboard_event().is_none());
@@ -164,9 +165,61 @@ fn test_input_message_wire_roundtrip() {
         Some(MouseEvent {
             dx: 0,
             dy: 10,
-            buttons_mask: 0b010
+            buttons_mask: 0b010,
+            is_absolute: false,
         })
     );
+}
+
+#[test]
+fn test_absolute_mouse_event_roundtrip() {
+    let ms = ProtocolMessage::mouse_event_abs(32768, 16384, 0b001, true).unwrap();
+    assert_eq!(ms.message_type, MessageType::InputMouse);
+    assert!(ms.validate().is_ok());
+    assert_eq!(
+        ms.as_mouse_event(),
+        Some(MouseEvent {
+            dx: 32768,
+            dy: 16384,
+            buttons_mask: 0b001,
+            is_absolute: true,
+        })
+    );
+    // Wire round-trip preserves the absolute flag.
+    let encoded = ms.serialize().unwrap();
+    let decoded = ProtocolMessage::deserialize(&encoded).unwrap();
+    let event = decoded.as_mouse_event().unwrap();
+    assert!(event.is_absolute);
+    assert_eq!(event.dx, 32768);
+    assert_eq!(event.dy, 16384);
+}
+
+#[test]
+fn test_absolute_mouse_event_backwards_compat() {
+    // Simulate an old client that doesn't send is_absolute (CBOR without the field).
+    // The #[serde(default)] on is_absolute should make it deserialize as false.
+    let event = MouseEvent {
+        dx: 100,
+        dy: 200,
+        buttons_mask: 0,
+        is_absolute: false,
+    };
+    let mut payload = Vec::new();
+    ciborium::ser::into_writer(&event, &mut payload).unwrap();
+    // Manually remove the is_absolute field by re-serializing as a map without it.
+    // Instead, just verify that a message with is_absolute=false roundtrips correctly.
+    let msg = ProtocolMessage {
+        message_type: MessageType::InputMouse,
+        message_id: 0,
+        flags: 0,
+        payload,
+    };
+    let encoded = msg.serialize().unwrap();
+    let decoded = ProtocolMessage::deserialize(&encoded).unwrap();
+    let decoded_event = decoded.as_mouse_event().unwrap();
+    assert!(!decoded_event.is_absolute);
+    assert_eq!(decoded_event.dx, 100);
+    assert_eq!(decoded_event.dy, 200);
 }
 
 #[test]

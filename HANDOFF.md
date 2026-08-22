@@ -40,6 +40,7 @@ The following principles were explicitly discussed and adopted. **Do not contrad
 - **No panics in library code.** Workspace lints deny `unwrap_used` and `expect_used`.
 - **Every public API decision is traceable to an ADR.**
 - **Workspace-wide lint policy.** All crates inherit `[lints] workspace = true`.
+- **No attributions in commits.** Never include AI agent signatures, robot emojis (🤖), Co-authored-by lines, or any attribution footer in git commit messages unless the user explicitly requests it.
 
 ---
 

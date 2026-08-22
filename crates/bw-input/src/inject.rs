@@ -47,6 +47,16 @@ impl InputInjector {
         self.backend.send(&InjectedInput::MouseMove { dx, dy })
     }
 
+    /// Moves the cursor to an absolute position in MOUSEEVENTF_ABSOLUTE
+    /// normalized coordinates (0–65535 mapped to the full virtual screen).
+    ///
+    /// This bypasses Windows pointer ballistics, eliminating the jitter
+    /// caused by rapid relative micro-moves.
+    pub fn inject_mouse_move_absolute(&self, norm_x: i32, norm_y: i32) -> Result<(), InputError> {
+        self.backend
+            .send(&InjectedInput::MouseMoveAbsolute { norm_x, norm_y })
+    }
+
     /// Presses (`down = true`) or releases (`down = false`) a mouse button.
     pub fn inject_mouse_click(&self, button: MouseButton, down: bool) -> Result<(), InputError> {
         self.backend
@@ -139,9 +149,9 @@ fn platform_backend() -> impl InputBackend {
 pub mod win32 {
     use windows::Win32::UI::Input::KeyboardAndMouse::{
         SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYBD_EVENT_FLAGS,
-        KEYEVENTF_KEYUP, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MIDDLEDOWN,
-        MOUSEEVENTF_MIDDLEUP, MOUSEEVENTF_MOVE, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP,
-        MOUSEINPUT, MOUSE_EVENT_FLAGS, VIRTUAL_KEY,
+        KEYEVENTF_KEYUP, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
+        MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP, MOUSEEVENTF_MOVE, MOUSEEVENTF_RIGHTDOWN,
+        MOUSEEVENTF_RIGHTUP, MOUSEINPUT, MOUSE_EVENT_FLAGS, VIRTUAL_KEY,
     };
 
     use crate::error::InputError;
@@ -162,6 +172,9 @@ pub mod win32 {
     fn build_inputs(input: &InjectedInput) -> Vec<INPUT> {
         match input {
             InjectedInput::MouseMove { dx, dy } => vec![mouse_move_input(*dx, *dy)],
+            InjectedInput::MouseMoveAbsolute { norm_x, norm_y } => {
+                vec![mouse_move_absolute_input(*norm_x, *norm_y)]
+            }
             InjectedInput::MouseClick { button, down } => vec![mouse_click_input(*button, *down)],
             InjectedInput::Keyboard { keycode, down } => vec![keyboard_input(*keycode, *down)],
         }
@@ -177,6 +190,27 @@ pub mod win32 {
                     dy,
                     mouseData: 0,
                     dwFlags: MOUSEEVENTF_MOVE,
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        }
+    }
+
+    /// Builds an absolute mouse-move [`INPUT`] event using MOUSEEVENTF_ABSOLUTE.
+    ///
+    /// Coordinates are in the 0–65535 normalized space mapped to the full
+    /// virtual screen. This bypasses Windows pointer ballistics, which is
+    /// critical for remote desktop cursor smoothness.
+    fn mouse_move_absolute_input(norm_x: i32, norm_y: i32) -> INPUT {
+        INPUT {
+            r#type: INPUT_MOUSE,
+            Anonymous: INPUT_0 {
+                mi: MOUSEINPUT {
+                    dx: norm_x,
+                    dy: norm_y,
+                    mouseData: 0,
+                    dwFlags: MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE,
                     time: 0,
                     dwExtraInfo: 0,
                 },
@@ -270,6 +304,18 @@ pub mod win32 {
         }
 
         #[test]
+        fn mouse_move_absolute_builds_correct_flags() {
+            let input = mouse_move_absolute_input(32768, 16384);
+            assert_eq!(input.r#type, INPUT_MOUSE);
+            // SAFETY: the union field is set by the builder under test.
+            let mi = unsafe { input.Anonymous.mi };
+            assert_eq!(mi.dx, 32768);
+            assert_eq!(mi.dy, 16384);
+            assert_eq!(mi.mouseData, 0);
+            assert_eq!(mi.dwFlags, MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE);
+        }
+
+        #[test]
         fn mouse_click_builds_correct_button_flags() {
             let cases = [
                 (MouseButton::Left, true, MOUSEEVENTF_LEFTDOWN),
@@ -311,6 +357,14 @@ pub mod win32 {
         fn build_inputs_maps_every_event_kind() {
             assert_eq!(
                 build_inputs(&InjectedInput::MouseMove { dx: 5, dy: 6 }).len(),
+                1
+            );
+            assert_eq!(
+                build_inputs(&InjectedInput::MouseMoveAbsolute {
+                    norm_x: 32768,
+                    norm_y: 32768
+                })
+                .len(),
                 1
             );
             assert_eq!(

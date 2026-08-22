@@ -26,6 +26,15 @@ pub enum InjectedInput {
         /// Vertical delta in screen pixels.
         dy: i32,
     },
+    /// Absolute mouse movement to `(norm_x, norm_y)` in MOUSEEVENTF_ABSOLUTE
+    /// normalized coordinates (0–65535 mapped to the full virtual screen).
+    /// Bypasses Windows pointer ballistics.
+    MouseMoveAbsolute {
+        /// Normalized horizontal position (0 = left edge, 65535 = right edge).
+        norm_x: i32,
+        /// Normalized vertical position (0 = top edge, 65535 = bottom edge).
+        norm_y: i32,
+    },
     /// Mouse button press (`down = true`) or release (`down = false`).
     MouseClick {
         /// The button being pressed or released.

@@ -58,9 +58,15 @@ pub fn register_input_handlers(dispatcher: &MessageDispatcher, injector: InputIn
         Arc::new(move |envelope: MessageEnvelope| {
             let event = parse_mouse(&envelope)?;
             if event.dx != 0 || event.dy != 0 {
-                mouse_injector
-                    .inject_mouse_move(event.dx, event.dy)
-                    .map_err(|e| DispatchError::Handler(e.to_string()))?;
+                if event.is_absolute {
+                    mouse_injector
+                        .inject_mouse_move_absolute(event.dx, event.dy)
+                        .map_err(|e| DispatchError::Handler(e.to_string()))?;
+                } else {
+                    mouse_injector
+                        .inject_mouse_move(event.dx, event.dy)
+                        .map_err(|e| DispatchError::Handler(e.to_string()))?;
+                }
             }
             let mut states = button_states.lock().unwrap_or_else(|e| e.into_inner());
             // Bound the map: a server keeps a small number of live sessions.

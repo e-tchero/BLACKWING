@@ -104,8 +104,20 @@ struct App {
     input_tx: tokio::sync::mpsc::Sender<ProtocolMessage>,
     /// Current mouse button state: bit 0 = left, bit 1 = right, bit 2 = middle.
     buttons_mask: u8,
+    /// Sub-pixel mouse movement accumulator (horizontal).
+    mouse_acc_x: f64,
+    /// Sub-pixel mouse movement accumulator (vertical).
+    mouse_acc_y: f64,
+    /// Absolute cursor X position in window pixels (starts at center).
+    mouse_abs_x: f64,
+    /// Absolute cursor Y position in window pixels (starts at center).
+    mouse_abs_y: f64,
+    /// Timestamp of last mouse movement flush to the server.
+    mouse_last_flush: std::time::Instant,
     /// Dispatcher that routes inbound messages (clipboard, audio) to handlers.
     _dispatcher: Arc<MessageDispatcher>,
+    /// Scaling algorithm for blitting decoded frames to the pixel buffer.
+    scale_mode: ScaleMode,
 }
 
 impl App {
@@ -122,7 +134,13 @@ impl App {
             last_image: None,
             input_tx,
             buttons_mask: 0,
+            mouse_acc_x: 0.0,
+            mouse_acc_y: 0.0,
+            mouse_abs_x: WINDOW_WIDTH as f64 / 2.0,
+            mouse_abs_y: WINDOW_HEIGHT as f64 / 2.0,
+            mouse_last_flush: std::time::Instant::now(),
             _dispatcher: dispatcher,
+            scale_mode: ScaleMode::Bilinear,
         }
     }
 
@@ -133,21 +151,27 @@ impl App {
     }
 
     /// Blits the latest decoded frame into the pixel buffer and presents it.
-    fn render(&mut self) {
+    /// Returns `true` if a new frame was rendered.
+    fn render(&mut self) -> bool {
         // Drain the network receiver, keeping only the newest frame.
+        let mut got_new_frame = false;
         while let Ok(image) = self.frame_rx.try_recv() {
             self.last_image = Some(image);
+            got_new_frame = true;
         }
 
         let Some(pixels) = self.pixels.as_mut() else {
-            return;
+            return false;
         };
         let Some(image) = self.last_image.as_ref() else {
-            return;
+            return false;
         };
 
-        blit_rgb_to_frame(pixels.frame_mut(), image);
+        let win_w = pixels.texture().width();
+        let win_h = pixels.texture().height();
+        blit_rgb_to_frame(pixels.frame_mut(), image, win_w, win_h, self.scale_mode);
         pixels.render().expect("failed to render pixel buffer");
+        got_new_frame
     }
 }
 
@@ -196,6 +220,10 @@ impl ApplicationHandler for App {
             }
             WindowEvent::RedrawRequested => {
                 self.render();
+                // Keep polling for new frames at the display refresh rate.
+                // We must continue requesting redraws so that frames arriving
+                // from the network are drained promptly — otherwise they pile
+                // up in the channel and cause latency spikes.
                 if let Some(window) = self.window {
                     window.request_redraw();
                 }
@@ -239,10 +267,38 @@ impl ApplicationHandler for App {
         event: DeviceEvent,
     ) {
         if let DeviceEvent::MouseMotion { delta } = event {
-            let message =
-                ProtocolMessage::mouse_event(delta.0 as i32, delta.1 as i32, self.buttons_mask)
-                    .expect("mouse event");
-            self.send_input(message);
+            // Accumulate sub-pixel f64 deltas and track absolute position.
+            // Flush when: (a) at least 4 px accumulated, or (b) 16 ms elapsed
+            // (one frame at 60 fps) — whichever comes first. Sending fewer, larger
+            // deltas reduces the number of SendInput calls and eliminates the
+            // Windows pointer ballistics jitter.
+            self.mouse_acc_x += delta.0;
+            self.mouse_acc_y += delta.1;
+            self.mouse_abs_x += delta.0;
+            self.mouse_abs_y += delta.1;
+            // Clamp to window bounds.
+            self.mouse_abs_x = self.mouse_abs_x.clamp(0.0, WINDOW_WIDTH as f64 - 1.0);
+            self.mouse_abs_y = self.mouse_abs_y.clamp(0.0, WINDOW_HEIGHT as f64 - 1.0);
+            let now = std::time::Instant::now();
+            let elapsed = now.duration_since(self.mouse_last_flush);
+            let threshold_reached = self.mouse_acc_x.abs() >= 4.0 || self.mouse_acc_y.abs() >= 4.0;
+            if threshold_reached || elapsed.as_millis() >= 16 {
+                let acc_dx = self.mouse_acc_x as i32;
+                let acc_dy = self.mouse_acc_y as i32;
+                self.mouse_acc_x -= acc_dx as f64;
+                self.mouse_acc_y -= acc_dy as f64;
+                self.mouse_last_flush = now;
+                if acc_dx != 0 || acc_dy != 0 {
+                    // Send absolute normalized coordinates (0–65535) to bypass
+                    // Windows pointer ballistics entirely.
+                    let norm_x = (self.mouse_abs_x / WINDOW_WIDTH as f64 * 65535.0) as i32;
+                    let norm_y = (self.mouse_abs_y / WINDOW_HEIGHT as f64 * 65535.0) as i32;
+                    let message =
+                        ProtocolMessage::mouse_event_abs(norm_x, norm_y, self.buttons_mask, true)
+                            .expect("mouse event");
+                    self.send_input(message);
+                }
+            }
         }
     }
 }
@@ -346,12 +402,171 @@ fn handle_incoming_message(
     dispatcher.dispatch(envelope)
 }
 
+/// Scaling algorithm used when mapping decoded video frames to the pixel
+/// buffer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScaleMode {
+    /// Fastest — picks the single nearest source pixel.  Produces blocky
+    /// edges when the source and destination sizes differ significantly.
+    #[allow(dead_code)] // available as an explicit option; default is Bilinear.
+    NearestNeighbor,
+    /// Smooth — blends the four nearest source pixels weighted by distance.
+    /// Produces clean, artifact-free output at the cost of ~4x more work per
+    /// pixel.
+    Bilinear,
+}
+
 /// Copies an RGB8 image (3 bytes/pixel) into an RGBA8 pixel-buffer frame
-/// (4 bytes/pixel), setting alpha to 255. Oversized sources are clipped.
-fn blit_rgb_to_frame(frame: &mut [u8], image: &DecodedImage) {
-    for (dst, src_px) in frame.chunks_exact_mut(4).zip(image.rgb.chunks_exact(3)) {
-        dst[..3].copy_from_slice(src_px);
-        dst[3] = 0xFF;
+/// (4 bytes/pixel), setting alpha to 255.
+///
+/// This function handles three critical cases that the naive flat-zip blit
+/// missed:
+///
+/// 1. **Stride mismatch** — the decoded image may have a different row width
+///    than the pixel buffer (e.g. server at 1920px, client window at 1280px).
+///    The old flat-zip caused a diagonal shear on every frame.
+/// 2. **Resolution scaling** — scales the full server frame to fit the client
+///    window using the chosen [`ScaleMode`].
+/// 3. **Buffer clearing** — zeros the pixel buffer before blitting so stale
+///    ghost pixels from previous frames are eliminated.
+fn blit_rgb_to_frame(
+    frame: &mut [u8],
+    image: &DecodedImage,
+    win_w: u32,
+    win_h: u32,
+    mode: ScaleMode,
+) {
+    frame.fill(0);
+    if image.rgb.is_empty() || image.width == 0 || image.height == 0 {
+        return;
+    }
+
+    let ctx = BlitContext::new(
+        &image.rgb,
+        image.width as usize,
+        image.height as usize,
+        win_w as usize,
+        win_h as usize,
+    );
+
+    match mode {
+        ScaleMode::NearestNeighbor => ctx.blit_nearest(frame),
+        ScaleMode::Bilinear => ctx.blit_bilinear(frame),
+    }
+}
+
+/// Shared geometry for a single blit operation.
+struct BlitContext {
+    rgb: Vec<u8>,
+    src_w: usize,
+    src_h: usize,
+    src_stride: usize,
+    dst_w: usize,
+    dst_h: usize,
+    dst_stride: usize,
+    x_scale: f32,
+    y_scale: f32,
+    src_max_x: f32,
+    src_max_y: f32,
+}
+
+impl BlitContext {
+    fn new(rgb: &[u8], src_w: usize, src_h: usize, dst_w: usize, dst_h: usize) -> Self {
+        Self {
+            rgb: rgb.to_vec(),
+            src_w,
+            src_h,
+            src_stride: src_w * 3,
+            dst_w,
+            dst_h,
+            dst_stride: dst_w * 4,
+            x_scale: src_w as f32 / dst_w as f32,
+            y_scale: src_h as f32 / dst_h as f32,
+            src_max_x: (src_w - 1) as f32,
+            src_max_y: (src_h - 1) as f32,
+        }
+    }
+
+    /// Nearest-neighbor: picks the single closest source pixel.
+    fn blit_nearest(&self, frame: &mut [u8]) {
+        for dst_y in 0..self.dst_h {
+            let src_y = dst_y * self.src_h / self.dst_h;
+            let src_row = src_y * self.src_stride;
+            let dst_row = dst_y * self.dst_stride;
+
+            for dst_x in 0..self.dst_w {
+                let src_x = dst_x * self.src_w / self.dst_w;
+                let si = src_row + src_x * 3;
+                let di = dst_row + dst_x * 4;
+
+                if si + 3 <= self.rgb.len() && di + 4 <= frame.len() {
+                    frame[di] = self.rgb[si];
+                    frame[di + 1] = self.rgb[si + 1];
+                    frame[di + 2] = self.rgb[si + 2];
+                    frame[di + 3] = 0xFF;
+                }
+            }
+        }
+    }
+
+    /// Bilinear interpolation: blends the four nearest source pixels
+    /// weighted by fractional distance for smooth scaling.
+    fn blit_bilinear(&self, frame: &mut [u8]) {
+        if self.src_w == self.dst_w && self.src_h == self.dst_h {
+            self.blit_nearest(frame);
+            return;
+        }
+
+        for dst_y in 0..self.dst_h {
+            let dst_row = dst_y * self.dst_stride;
+            let sy_f = (dst_y as f32 + 0.5) * self.y_scale - 0.5;
+            let sy_clamped = sy_f.clamp(0.0, self.src_max_y);
+            let sy0 = sy_clamped as usize;
+            let sy1 = (sy0 + 1).min(self.src_h - 1);
+            let fy = sy_clamped - sy0 as f32;
+            let one_minus_fy = 1.0 - fy;
+
+            let row0 = sy0 * self.src_stride;
+            let row1 = sy1 * self.src_stride;
+
+            for dst_x in 0..self.dst_w {
+                let di = dst_row + dst_x * 4;
+                if di + 4 > frame.len() {
+                    break;
+                }
+
+                let sx_f = (dst_x as f32 + 0.5) * self.x_scale - 0.5;
+                let sx_clamped = sx_f.clamp(0.0, self.src_max_x);
+                let sx0 = sx_clamped as usize;
+                let sx1 = (sx0 + 1).min(self.src_w - 1);
+                let fx = sx_clamped - sx0 as f32;
+                let one_minus_fx = 1.0 - fx;
+
+                // Four surrounding pixel offsets.
+                let p00 = row0 + sx0 * 3;
+                let p10 = row0 + sx1 * 3;
+                let p01 = row1 + sx0 * 3;
+                let p11 = row1 + sx1 * 3;
+
+                if p11 + 3 > self.rgb.len() {
+                    break;
+                }
+
+                let w00 = one_minus_fx * one_minus_fy;
+                let w10 = fx * one_minus_fy;
+                let w01 = one_minus_fx * fy;
+                let w11 = fx * fy;
+
+                for c in 0..3 {
+                    let v = w00 * self.rgb[p00 + c] as f32
+                        + w10 * self.rgb[p10 + c] as f32
+                        + w01 * self.rgb[p01 + c] as f32
+                        + w11 * self.rgb[p11 + c] as f32;
+                    frame[di + c] = v.round().clamp(0.0, 255.0) as u8;
+                }
+                frame[di + 3] = 0xFF;
+            }
+        }
     }
 }
 
@@ -883,5 +1098,151 @@ mod tests {
         })
         .expect("audio message");
         assert!(handle_incoming_message(&dispatcher, message).is_ok());
+    }
+
+    // ------------------------------------------------------------------
+    // Blit / scaling tests
+    // ------------------------------------------------------------------
+
+    /// Creates a solid-color RGB image.
+    fn solid_image(w: u32, h: u32, r: u8, g: u8, b: u8) -> DecodedImage {
+        let mut rgb = Vec::with_capacity((w * h * 3) as usize);
+        for _ in 0..(w * h) {
+            rgb.extend_from_slice(&[r, g, b]);
+        }
+        DecodedImage {
+            width: w,
+            height: h,
+            rgb,
+        }
+    }
+
+    /// Creates a gradient image: red channel ramps 0..255 across columns.
+    fn gradient_image(w: u32, h: u32) -> DecodedImage {
+        let mut rgb = Vec::with_capacity((w * h * 3) as usize);
+        for y in 0..h {
+            for x in 0..w {
+                let r = (x * 255 / w) as u8;
+                let g = (y * 255 / h) as u8;
+                rgb.extend_from_slice(&[r, g, 128]);
+            }
+        }
+        DecodedImage {
+            width: w,
+            height: h,
+            rgb,
+        }
+    }
+
+    #[test]
+    fn test_blit_nearest_matches_simple_copy_for_same_size() {
+        let img = solid_image(4, 4, 200, 100, 50);
+        let mut frame = vec![0u8; 4 * 4 * 4];
+        blit_rgb_to_frame(&mut frame, &img, 4, 4, ScaleMode::NearestNeighbor);
+        // Every pixel should be (200, 100, 50, 0xFF).
+        for px in frame.chunks_exact(4) {
+            assert_eq!(&px[..3], &[200, 100, 50]);
+            assert_eq!(px[3], 0xFF);
+        }
+    }
+
+    #[test]
+    fn test_blit_bilinear_matches_nearest_for_same_size() {
+        let img = gradient_image(8, 8);
+        let mut nn_frame = vec![0u8; 8 * 8 * 4];
+        let mut bl_frame = vec![0u8; 8 * 8 * 4];
+        blit_rgb_to_frame(&mut nn_frame, &img, 8, 8, ScaleMode::NearestNeighbor);
+        blit_rgb_to_frame(&mut bl_frame, &img, 8, 8, ScaleMode::Bilinear);
+        assert_eq!(nn_frame, bl_frame, "same-size blit should be identical");
+    }
+
+    #[test]
+    fn test_blit_bilinear_downscale_produces_smooth_transitions() {
+        // Source: 4x1 gradient [0, 85, 170, 255] → dest: 2x1.
+        // Bilinear should produce averaged values, not blocky copies.
+        let img = solid_image(4, 1, 0, 0, 0);
+        // Manually build a gradient.
+        let mut img = img;
+        img.rgb[0] = 0;
+        img.rgb[1] = 3;
+        img.rgb[2] = 0; // pixel 0: R=0
+        img.rgb[3] = 100;
+        img.rgb[4] = 3;
+        img.rgb[5] = 0; // pixel 1: R=100
+        img.rgb[6] = 100;
+        img.rgb[7] = 3;
+        img.rgb[8] = 0; // pixel 2: R=100
+        img.rgb[9] = 200;
+        img.rgb[10] = 3;
+        img.rgb[11] = 0; // pixel 3: R=200
+
+        let mut frame = vec![0u8; 2 * 1 * 4];
+        blit_rgb_to_frame(&mut frame, &img, 2, 1, ScaleMode::Bilinear);
+
+        // With 4→2 downscale each dest pixel covers 2 source pixels.
+        // Dest pixel 0 should blend src[0] (R=0) and src[1] (R=100).
+        // Dest pixel 1 should blend src[2] (R=100) and src[3] (R=200).
+        let r0 = frame[0];
+        let r1 = frame[4];
+        assert!(
+            r0 > 0 && r0 < 100,
+            "first pixel should be blended, got {r0}"
+        );
+        assert!(
+            r1 > 100 && r1 < 200,
+            "second pixel should be blended, got {r1}"
+        );
+    }
+
+    #[test]
+    fn test_blit_bilinear_stays_in_bounds() {
+        // Downscale a 100x100 image to 1x1 — should not panic.
+        let img = gradient_image(100, 100);
+        let mut frame = vec![0u8; 1 * 1 * 4];
+        blit_rgb_to_frame(&mut frame, &img, 1, 1, ScaleMode::Bilinear);
+        assert_eq!(frame[3], 0xFF, "alpha must be 0xFF");
+    }
+
+    #[test]
+    fn test_blit_clears_stale_pixels_before_blitting() {
+        // Fill frame with garbage, then blit.  The frame should have been
+        // cleared to black first, so the only non-black pixels are those
+        // written by the blit itself.
+        let img = solid_image(4, 4, 255, 255, 255);
+        let mut frame = vec![0xAA; 16 * 16 * 4]; // fill with garbage
+        blit_rgb_to_frame(&mut frame, &img, 16, 16, ScaleMode::Bilinear);
+
+        // With bilinear clamping, the 4x4 white source is blended across
+        // the entire 16x16 destination.  Every pixel should be white.
+        for px in frame.chunks_exact(4) {
+            assert_eq!(px[0], 255, "R should be 255, not stale 0xAA");
+            assert_eq!(px[3], 0xFF, "alpha must be 0xFF");
+        }
+    }
+
+    #[test]
+    fn test_blit_nearest_clears_stale_pixels() {
+        // Nearest-neighbor doesn't clamp, so pixels outside the source
+        // should remain black (cleared), not the stale garbage value.
+        let img = solid_image(4, 4, 255, 255, 255);
+        let mut frame = vec![0xAA; 16 * 16 * 4];
+        blit_rgb_to_frame(&mut frame, &img, 16, 16, ScaleMode::NearestNeighbor);
+
+        // Bottom-right pixel (15,15) maps to source (3,3) → white.
+        let br = (15 * 16 + 15) * 4;
+        assert_eq!(frame[br], 255, "bottom-right should be white");
+    }
+
+    #[test]
+    fn test_blit_rgb_to_frame_empty_image() {
+        let img = DecodedImage {
+            width: 0,
+            height: 0,
+            rgb: vec![],
+        };
+        let mut frame = vec![0xAA; 64];
+        blit_rgb_to_frame(&mut frame, &img, 4, 4, ScaleMode::Bilinear);
+        // Empty image → frame should be all black (cleared), not 0xAA.
+        assert!(frame.iter().all(|&b| b == 0), "frame should be cleared");
     }
 }

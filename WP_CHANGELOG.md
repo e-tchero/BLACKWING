@@ -249,6 +249,7 @@ These decisions are locked. Do not reverse without creating a new ADR.
 | DeviceId format | `bw-id-` prefix + 64 lowercase hex chars (32 bytes SHA-256 of Ed25519 public key). |
 | Quality gates mandatory | All five gates must pass before any WP is tagged complete. |
 | Workspace lint policy | All crates inherit `[lints] workspace = true`. |
+| No attributions in commits | Never include AI agent signatures, robot emojis (🤖), Co-authored-by lines, or any attribution footer in git commit messages unless explicitly requested. |
 
 ---
 

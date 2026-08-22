@@ -4,6 +4,12 @@ This is the first document every contributor reads. It outlines the physical str
 
 Last Updated: 2026-08-21
 
+## Commit Policy
+
+**No attributions in commits.** Never include AI agent signatures, robot emojis (🤖), Co-authored-by lines, or any attribution footer in git commit messages unless the user explicitly requests it. Commit messages follow conventional-commit format only.
+
+---
+
 ```text
 BLACKWING/
 ├── archive/

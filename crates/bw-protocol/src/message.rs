@@ -49,19 +49,32 @@ pub struct KeyboardEvent {
     pub is_down: bool,
 }
 
-/// A remote mouse event (relative movement and/or button state).
+/// A remote mouse event (movement and/or button state).
 ///
 /// Carried in the payload of a [`ProtocolMessage`] with
 /// [`MessageType::InputMouse`].
+///
+/// When `is_absolute` is `false` (default), `dx`/`dy` are relative pixel
+/// deltas from the cursor's current position. When `is_absolute` is `true`,
+/// `dx`/`dy` are absolute coordinates in the MOUSEEVENTF_ABSOLUTE normalized
+/// space (0–65535 mapped to the full screen), which bypasses Windows pointer
+/// ballistics and eliminates cursor jitter.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MouseEvent {
-    /// Relative horizontal cursor movement in pixels.
+    /// Horizontal cursor position: relative delta (pixels) or absolute
+    /// (normalized 0–65535) depending on `is_absolute`.
     pub dx: i32,
-    /// Relative vertical cursor movement in pixels.
+    /// Vertical cursor position: relative delta (pixels) or absolute
+    /// (normalized 0–65535) depending on `is_absolute`.
     pub dy: i32,
     /// Bitmask of mouse button states: bit 0 = left, bit 1 = right,
     /// bit 2 = middle. `0` means no buttons pressed.
     pub buttons_mask: u8,
+    /// When `true`, `dx`/`dy` are absolute normalized coordinates
+    /// (0–65535) for MOUSEEVENTF_ABSOLUTE injection. When `false`,
+    /// they are relative pixel deltas.
+    #[serde(default)]
+    pub is_absolute: bool,
 }
 
 /// The format of a clipboard payload.
@@ -202,10 +215,22 @@ impl ProtocolMessage {
     /// The constructed message, or `ProtocolError` if the event cannot be
     /// serialized into the payload.
     pub fn mouse_event(dx: i32, dy: i32, buttons_mask: u8) -> Result<Self, ProtocolError> {
+        Self::mouse_event_abs(dx, dy, buttons_mask, false)
+    }
+
+    /// Builds an [`MessageType::InputMouse`] message carrying a [`MouseEvent`]
+    /// with absolute or relative coordinates.
+    pub fn mouse_event_abs(
+        dx: i32,
+        dy: i32,
+        buttons_mask: u8,
+        is_absolute: bool,
+    ) -> Result<Self, ProtocolError> {
         let event = MouseEvent {
             dx,
             dy,
             buttons_mask,
+            is_absolute,
         };
         let mut payload = Vec::new();
         ciborium::ser::into_writer(&event, &mut payload)
