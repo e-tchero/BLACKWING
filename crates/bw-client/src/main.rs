@@ -1176,7 +1176,8 @@ mod tests {
         img.rgb[10] = 3;
         img.rgb[11] = 0; // pixel 3: R=200
 
-        let mut frame = vec![0u8; 2 * 1 * 4];
+        let (dst_w, dst_h, bpp) = (2usize, 1usize, 4usize);
+        let mut frame = vec![0u8; dst_w * dst_h * bpp];
         blit_rgb_to_frame(&mut frame, &img, 2, 1, ScaleMode::Bilinear);
 
         // With 4→2 downscale each dest pixel covers 2 source pixels.
@@ -1198,7 +1199,7 @@ mod tests {
     fn test_blit_bilinear_stays_in_bounds() {
         // Downscale a 100x100 image to 1x1 — should not panic.
         let img = gradient_image(100, 100);
-        let mut frame = vec![0u8; 1 * 1 * 4];
+        let mut frame = vec![0u8; 4]; // 1x1 BGRA
         blit_rgb_to_frame(&mut frame, &img, 1, 1, ScaleMode::Bilinear);
         assert_eq!(frame[3], 0xFF, "alpha must be 0xFF");
     }
