@@ -71,6 +71,7 @@ impl CaptureBackend for MockCaptureBackend {
             dirty_rects: vec![],
             move_rects: vec![],
             cursor: None,
+            is_refresh: false,
         })
     }
 

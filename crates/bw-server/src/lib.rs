@@ -235,3 +235,122 @@ pub fn spawn_clipboard_poller(
         eprintln!("warning: failed to start clipboard poller: {e}");
     }
 }
+
+/// Composites a cursor overlay onto a BGRA frame buffer.
+///
+/// Draws an inverted crosshair at the cursor position so the remote user
+/// can see where the server's cursor is. The crosshair uses XOR blending
+/// (inverted colors) so it's visible on any background.
+///
+/// # Arguments
+///
+/// * `buffer` — mutable BGRA pixel buffer (4 bytes per pixel, row-major)
+/// * `stride` — bytes per row (may include padding beyond `width * 4`)
+/// * `width` — frame width in pixels
+/// * `height` — frame height in pixels
+/// * `cursor_x` — cursor X position in display coordinates
+/// * `cursor_y` — cursor Y position in display coordinates
+/// * `cursor_visible` — whether the cursor should be drawn
+pub fn composite_cursor(
+    buffer: &mut [u8],
+    stride: u32,
+    width: u32,
+    height: u32,
+    cursor_x: i32,
+    cursor_y: i32,
+    cursor_visible: bool,
+) {
+    if !cursor_visible || buffer.is_empty() {
+        return;
+    }
+
+    // Clamp cursor to frame bounds.
+    let cx = cursor_x.clamp(0, width as i32 - 1) as u32;
+    let cy = cursor_y.clamp(0, height as i32 - 1) as u32;
+
+    // Draw a small crosshair (6px arms) with inverted colors.
+    // This technique is used by screen capture tools — XOR-ing the pixel
+    // values makes the crosshair visible on both light and dark backgrounds.
+    let arm = 6u32;
+
+    // Horizontal line (left and right of cursor)
+    for i in 1..=arm {
+        if cx >= i {
+            xor_bgra_pixel(buffer, stride, width, height, cx - i, cy);
+        }
+        if cx + i < width {
+            xor_bgra_pixel(buffer, stride, width, height, cx + i, cy);
+        }
+    }
+
+    // Vertical line (above and below cursor)
+    for i in 1..=arm {
+        if cy >= i {
+            xor_bgra_pixel(buffer, stride, width, height, cx, cy - i);
+        }
+        if cy + i < height {
+            xor_bgra_pixel(buffer, stride, width, height, cx, cy + i);
+        }
+    }
+
+    // Center pixel
+    xor_bgra_pixel(buffer, stride, width, height, cx, cy);
+}
+
+/// XOR-blends a single BGRA pixel, inverting its color.
+fn xor_bgra_pixel(buffer: &mut [u8], stride: u32, width: u32, height: u32, x: u32, y: u32) {
+    if x >= width || y >= height {
+        return;
+    }
+    let offset = (y * stride + x * 4) as usize;
+    if offset + 3 < buffer.len() {
+        buffer[offset] ^= 0xFF; // B
+        buffer[offset + 1] ^= 0xFF; // G
+        buffer[offset + 2] ^= 0xFF; // R
+        // Alpha channel stays the same
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn composite_cursor_invisible_does_nothing() {
+        let mut buffer = vec![0xAA; 400]; // 10x10 BGRA
+        let original = buffer.clone();
+        composite_cursor(&mut buffer, 40, 10, 10, 5, 5, false);
+        assert_eq!(
+            buffer, original,
+            "invisible cursor should not modify buffer"
+        );
+    }
+
+    #[test]
+    fn composite_cursor_out_of_bounds_does_nothing() {
+        let mut buffer = vec![0xAA; 400];
+        let original = buffer.clone();
+        // Cursor outside frame bounds — should be clamped and not panic.
+        composite_cursor(&mut buffer, 40, 10, 10, 100, 100, true);
+        // Center pixel should be XOR'd (clamped to 9,9).
+        assert_ne!(buffer, original, "cursor should modify at least one pixel");
+    }
+
+    #[test]
+    fn composite_cursor_xor_blends_center_pixel() {
+        let mut buffer = vec![0x00; 400]; // 10x10, all black
+        composite_cursor(&mut buffer, 40, 10, 10, 5, 5, true);
+        // Center pixel (5,5) should be XOR'd: 0x00 ^ 0xFF = 0xFF for BGR.
+        let offset = (5 * 40 + 5 * 4) as usize;
+        assert_eq!(buffer[offset], 0xFF, "blue channel should be XOR'd");
+        assert_eq!(buffer[offset + 1], 0xFF, "green channel should be XOR'd");
+        assert_eq!(buffer[offset + 2], 0xFF, "red channel should be XOR'd");
+        assert_eq!(buffer[offset + 3], 0x00, "alpha should not change");
+    }
+
+    #[test]
+    fn composite_cursor_does_not_panic_on_empty_buffer() {
+        let mut buffer: Vec<u8> = vec![];
+        composite_cursor(&mut buffer, 0, 0, 0, 0, 0, true);
+    }
+}

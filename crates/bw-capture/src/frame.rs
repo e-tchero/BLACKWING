@@ -87,12 +87,21 @@ pub struct Frame {
     pub move_rects: Vec<MoveRect>,
     /// Optional cursor info if updated or drawn separately.
     pub cursor: Option<crate::cursor::CursorInfo>,
+    /// True if this frame is a periodic refresh (re-send of a cached frame)
+    /// rather than a fresh capture from the display backend.
+    ///
+    /// Refresh frames are injected by the capture thread when the display has
+    /// been idle for longer than the configured refresh interval. The encoder
+    /// should force an IDR keyframe for refresh frames so the client can
+    /// resync its decode reference chain.
+    pub is_refresh: bool,
 }
 
 impl Frame {
-    /// Returns true if the frame has at least one dirty region or move region.
+    /// Returns true if the frame has at least one dirty region, move region,
+    /// or is a periodic refresh frame.
     pub fn has_updates(&self) -> bool {
-        !self.dirty_rects.is_empty() || !self.move_rects.is_empty()
+        self.is_refresh || !self.dirty_rects.is_empty() || !self.move_rects.is_empty()
     }
 
     /// Returns the total number of bytes expected in the buffer.
@@ -237,7 +246,44 @@ mod tests {
             dirty_rects: vec![],
             move_rects: vec![],
             cursor: None,
+            is_refresh: false,
         };
         assert_eq!(frame.expected_buffer_size(), frame.buffer.len());
+    }
+
+    #[test]
+    fn refresh_frame_has_updates() {
+        // A frame with no dirty rects but is_refresh=true should report
+        // as having updates — the encoder must produce a keyframe for it.
+        let frame = Frame {
+            width: 100,
+            height: 100,
+            stride: 400,
+            timestamp_us: 0,
+            pixel_format: PixelFormat::Bgra8,
+            buffer: vec![0u8; 40000],
+            dirty_rects: vec![],
+            move_rects: vec![],
+            cursor: None,
+            is_refresh: true,
+        };
+        assert!(frame.has_updates());
+    }
+
+    #[test]
+    fn non_refresh_empty_frame_no_updates() {
+        let frame = Frame {
+            width: 100,
+            height: 100,
+            stride: 400,
+            timestamp_us: 0,
+            pixel_format: PixelFormat::Bgra8,
+            buffer: vec![],
+            dirty_rects: vec![],
+            move_rects: vec![],
+            cursor: None,
+            is_refresh: false,
+        };
+        assert!(!frame.has_updates());
     }
 }

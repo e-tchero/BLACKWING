@@ -23,6 +23,14 @@ impl EncoderPipeline {
 
                 // Keep reading frames as long as the channel is open
                 while let Some(frame) = frame_rx.blocking_recv() {
+                    // Periodic refresh frames must produce an IDR keyframe so
+                    // the client can resync its decode reference chain after
+                    // idle periods. Without this, the decoder would attempt to
+                    // decode P-frames against a stale reference.
+                    if frame.is_refresh {
+                        backend.force_keyframe();
+                    }
+
                     match backend.encode_frame(&frame, sequence) {
                         Ok(encoded_frame) => {
                             match encoded_tx.try_send(encoded_frame) {

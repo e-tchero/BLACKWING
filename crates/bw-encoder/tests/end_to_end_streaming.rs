@@ -64,6 +64,7 @@ impl CaptureBackend for DummyCaptureBackend {
             dirty_rects: vec![],
             move_rects: vec![],
             cursor: None,
+            is_refresh: false,
         })
     }
 

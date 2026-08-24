@@ -247,8 +247,8 @@ fn spawn_video_pipeline(out_tx: mpsc::Sender<ProtocolMessage>) {
         }
     };
 
-    // Capture thread → encoder pipeline → encoded frames.
-    let (capture_thread, frame_rx) =
+    // Capture thread → cursor compositor → encoder pipeline → encoded frames.
+    let (capture_thread, mut frame_rx) =
         match CaptureThread::spawn(Box::new(capture), display, FRAME_CAPACITY) {
             Ok(v) => v,
             Err(e) => {
@@ -258,8 +258,38 @@ fn spawn_video_pipeline(out_tx: mpsc::Sender<ProtocolMessage>) {
                 return;
             }
         };
+
+    // Cursor compositor: reads raw frames, composites the cursor overlay,
+    // and forwards to the encoder. This runs on a dedicated OS thread to
+    // avoid blocking the async runtime or the capture thread.
+    let (compositor_tx, compositor_rx) = mpsc::channel::<bw_capture::Frame>(FRAME_CAPACITY);
+    let _compositor_handle = std::thread::Builder::new()
+        .name("bw-cursor-compositor".into())
+        .spawn(move || {
+            while let Some(mut frame) = frame_rx.blocking_recv() {
+                // Composite the cursor overlay onto the frame buffer if
+                // cursor data is available.
+                if let Some(cursor) = &frame.cursor {
+                    bw_server::composite_cursor(
+                        &mut frame.buffer,
+                        frame.stride,
+                        frame.width,
+                        frame.height,
+                        cursor.x,
+                        cursor.y,
+                        cursor.visible,
+                    );
+                }
+                if compositor_tx.blocking_send(frame).is_err() {
+                    break; // Encoder dropped
+                }
+            }
+        })
+        .expect("failed to spawn cursor compositor thread");
+
     let (encoded_tx, mut encoded_rx) = mpsc::channel::<bw_encoder::EncodedFrame>(FRAME_CAPACITY);
-    let encoder = EncoderPipeline::spawn(Box::new(OpenH264Backend::new()), frame_rx, encoded_tx);
+    let encoder =
+        EncoderPipeline::spawn(Box::new(OpenH264Backend::new()), compositor_rx, encoded_tx);
 
     tokio::spawn(async move {
         let mut frames_sent: u64 = 0;
@@ -287,6 +317,7 @@ fn spawn_video_pipeline(out_tx: mpsc::Sender<ProtocolMessage>) {
             }
         }
         drop(capture_thread);
+        drop(_compositor_handle);
         drop(encoder);
     });
 }

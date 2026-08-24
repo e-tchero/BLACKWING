@@ -31,7 +31,7 @@ pub use backend::{CaptureBackend, CaptureError};
 pub use cursor::{CursorInfo, CursorShape};
 pub use frame::{merge_dirty_rects, DirtyRect, Frame, MoveRect, PixelFormat};
 pub use monitor::DisplayInfo;
-pub use thread::CaptureThread;
+pub use thread::{CaptureThread, FrameTimerConfig};
 
 #[cfg(target_os = "windows")]
 pub use windows::dxgi::DxgiCaptureBackend;

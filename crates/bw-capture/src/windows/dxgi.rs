@@ -1,5 +1,5 @@
 use crate::backend::{CaptureBackend, CaptureError};
-use crate::cursor::CursorInfo;
+use crate::cursor::{CursorInfo, CursorShape};
 use crate::frame::{DirtyRect, Frame, PixelFormat};
 use crate::monitor::DisplayInfo;
 
@@ -24,6 +24,8 @@ pub struct DxgiCaptureBackend {
     active_display: Option<DisplayInfo>,
     width: u32,
     height: u32,
+    /// Last known cursor state extracted from frame acquisition.
+    last_cursor: CursorInfo,
 }
 
 impl DxgiCaptureBackend {
@@ -37,6 +39,7 @@ impl DxgiCaptureBackend {
             active_display: None,
             width: 0,
             height: 0,
+            last_cursor: CursorInfo::default(),
         })
     }
 
@@ -236,6 +239,7 @@ impl CaptureBackend for DxgiCaptureBackend {
                             dirty_rects: vec![],
                             move_rects: vec![],
                             cursor: None,
+                            is_refresh: false,
                         });
                     }
                     if code == 0x887A0026u32 || code == 0x887A0001u32 || code == 0x80070005u32 {
@@ -345,6 +349,24 @@ impl CaptureBackend for DxgiCaptureBackend {
                 CaptureError::FrameAcquisitionFailed(format!("ReleaseFrame: {}", e))
             })?;
 
+            // Extract cursor position from the frame info. The pointer
+            // position is updated whenever the mouse moves, regardless of
+            // whether the desktop composition changed.
+            let cursor = {
+                let pos = frame_info.PointerPosition.Position;
+                let visible = frame_info.PointerPosition.Visible.as_bool();
+                CursorInfo {
+                    x: pos.x,
+                    y: pos.y,
+                    visible,
+                    shape: CursorShape::Arrow, // TODO: map PointerType
+                    bitmap: None,              // TODO: GetFramePointerShape
+                    bitmap_width: 0,
+                    bitmap_height: 0,
+                }
+            };
+            self.last_cursor = cursor.clone();
+
             Ok(Frame {
                 width: self.width,
                 height: self.height,
@@ -354,7 +376,8 @@ impl CaptureBackend for DxgiCaptureBackend {
                 buffer,
                 dirty_rects,
                 move_rects,
-                cursor: None,
+                cursor: Some(cursor),
+                is_refresh: false,
             })
         }
     }
@@ -363,9 +386,8 @@ impl CaptureBackend for DxgiCaptureBackend {
         if self.duplication.is_none() {
             return Err(CaptureError::Stopped);
         }
-
-        // TODO: Get cursor info from DXGI (PointerPosition/PointerShape)
-        Ok(CursorInfo::default())
+        // Return the last cursor position extracted during frame acquisition.
+        Ok(self.last_cursor.clone())
     }
 
     fn stop(&mut self) {
@@ -374,5 +396,6 @@ impl CaptureBackend for DxgiCaptureBackend {
         self.context = None;
         self.device = None;
         self.active_display = None;
+        self.last_cursor = CursorInfo::default();
     }
 }
