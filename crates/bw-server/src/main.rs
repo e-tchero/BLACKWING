@@ -25,6 +25,8 @@
 //   panicking with a message, per native-application convention.
 
 use std::path::PathBuf;
+
+use bw_crypto::random::{OsRandom, SecureRandom};
 use std::sync::Arc;
 
 use bw_auth::store::EnrollmentStore;
@@ -216,6 +218,13 @@ async fn handle_session(
     // Clipboard pipeline: poll local clipboard and send changes to the client.
     bw_server::spawn_clipboard_poller(out_tx);
 
+    // Generate a unique session ID for this connection so that per-session
+    // state (e.g. button tracking) does not leak across sessions.
+    let mut session_bytes = [0u8; 16];
+    let mut rng = OsRandom;
+    let _ = rng.fill(&mut session_bytes);
+    let session_id = SessionId(session_bytes);
+
     // Receiver loop: dispatch inbound control messages (input, clipboard).
     loop {
         let message = receiver.recv_message().await?;
@@ -223,7 +232,7 @@ async fn handle_session(
         let envelope = MessageEnvelope {
             source: NodeId(bw_crypto::DeviceId::from_digest([0x01; 32])),
             destination: NodeId(bw_crypto::DeviceId::from_digest([0x02; 32])),
-            session_id: SessionId([0u8; 16]),
+            session_id,
             route: Route::Direct,
             message,
             routing_flags: 0,

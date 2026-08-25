@@ -24,6 +24,10 @@ pub struct FrameTimerConfig {
     /// causes the encoder to produce an IDR keyframe. Set to 0 to disable
     /// periodic refreshes. Default: 1000ms (1 second).
     pub refresh_interval_ms: u64,
+    /// Minimum interval between real (non-idle) frames sent to the encoder.
+    /// Caps the capture rate to prevent the encoder from being overwhelmed
+    /// with frames it can't keep up with. Default: 33ms (~30 fps).
+    pub min_frame_interval_ms: u64,
 }
 
 impl Default for FrameTimerConfig {
@@ -31,6 +35,7 @@ impl Default for FrameTimerConfig {
         Self {
             idle_sleep_ms: 16,
             refresh_interval_ms: 1000,
+            min_frame_interval_ms: 33,
         }
     }
 }
@@ -91,6 +96,7 @@ impl CaptureThread {
         } else {
             None
         };
+        let min_frame_interval = Duration::from_millis(config.min_frame_interval_ms);
 
         let handle = thread::Builder::new()
             .name("bw-capture-thread".into())
@@ -117,9 +123,14 @@ impl CaptureThread {
                                     if last_real_frame_time.elapsed() >= refresh_int {
                                         // Periodic refresh: re-send the last captured frame
                                         // with is_refresh=true so the encoder forces a keyframe.
+                                        // Also query the current cursor position so the remote
+                                        // crosshair tracks movement even when the desktop is idle.
                                         let mut refresh_frame = (*cached).clone();
                                         refresh_frame.is_refresh = true;
                                         refresh_frame.timestamp_us = 0;
+                                        if let Ok(cursor) = backend.cursor_info() {
+                                            refresh_frame.cursor = Some(cursor);
+                                        }
 
                                         if frame_tx.blocking_send(refresh_frame).is_err() {
                                             break; // Receiver dropped
@@ -132,6 +143,14 @@ impl CaptureThread {
                             }
 
                             // Real frame from the backend — cache it and reset idle timer.
+                            // Enforce minimum frame interval to cap the capture rate
+                            // and prevent encoder backpressure.
+                            let now = Instant::now();
+                            let elapsed = now.duration_since(last_real_frame_time);
+                            if elapsed < min_frame_interval {
+                                thread::sleep(min_frame_interval - elapsed);
+                            }
+
                             last_frame = Some(frame.clone());
                             last_real_frame_time = Instant::now();
 
@@ -141,6 +160,18 @@ impl CaptureThread {
                         }
                         Err(e) => {
                             eprintln!("Capture thread error: {:?}", e);
+                            // Attempt recovery: stop and re-start the backend.
+                            // This handles DXGI_ERROR_ACCESS_LOST which occurs
+                            // during display mode changes, lock screens, or UAC.
+                            backend.stop();
+                            thread::sleep(Duration::from_millis(200));
+                            if backend.start(&display).is_ok() {
+                                eprintln!("Capture thread: recovered after ACCESS_LOST");
+                                last_frame = None;
+                                last_real_frame_time = Instant::now();
+                                continue;
+                            }
+                            eprintln!("Capture thread: recovery failed, stopping");
                             break;
                         }
                     }
@@ -182,6 +213,7 @@ mod tests {
         let config = FrameTimerConfig::default();
         assert_eq!(config.idle_sleep_ms, 16);
         assert_eq!(config.refresh_interval_ms, 1000);
+        assert_eq!(config.min_frame_interval_ms, 33);
     }
 
     #[test]

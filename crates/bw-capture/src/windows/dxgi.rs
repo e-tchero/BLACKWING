@@ -10,6 +10,7 @@ use windows::Win32::Graphics::Direct3D::*;
 use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::Win32::Graphics::Dxgi::*;
+use windows::Win32::UI::WindowsAndMessaging::{GetCursorInfo, CURSORINFO, CURSOR_SHOWING};
 
 /// DXGI desktop-duplication capture backend (Windows only).
 ///
@@ -228,7 +229,30 @@ impl CaptureBackend for DxgiCaptureBackend {
                 Err(e) => {
                     let code = e.code().0 as u32;
                     if code == 0x887A0027u32 {
-                        // DXGI_ERROR_WAIT_TIMEOUT
+                        // DXGI_ERROR_WAIT_TIMEOUT — screen is idle but cursor may
+                        // have moved. Query Win32 directly so the remote crosshair
+                        // tracks the cursor even when the desktop is static.
+                        let mut ci = CURSORINFO {
+                            cbSize: std::mem::size_of::<CURSORINFO>() as u32,
+                            ..Default::default()
+                        };
+                        let cursor = if GetCursorInfo(&mut ci).is_ok() {
+                            let pt = ci.ptScreenPos;
+                            let visible = (ci.flags.0 & CURSOR_SHOWING.0) != 0;
+                            CursorInfo {
+                                x: pt.x,
+                                y: pt.y,
+                                visible,
+                                shape: CursorShape::Arrow,
+                                bitmap: None,
+                                bitmap_width: 0,
+                                bitmap_height: 0,
+                            }
+                        } else {
+                            self.last_cursor.clone()
+                        };
+
+                        self.last_cursor = cursor.clone();
                         return Ok(Frame {
                             width: self.width,
                             height: self.height,
@@ -238,7 +262,7 @@ impl CaptureBackend for DxgiCaptureBackend {
                             buffer: vec![],
                             dirty_rects: vec![],
                             move_rects: vec![],
-                            cursor: None,
+                            cursor: Some(cursor),
                             is_refresh: false,
                         });
                     }
