@@ -209,4 +209,21 @@ impl RendezvousRegistry {
         let intent = intents.get(&intent_id).ok_or("Intent not found")?;
         Ok(intent.initiator)
     }
+
+    /// Returns all pending ConnectIntents targeting a device.
+    pub fn pending_for(&self, target: DeviceId) -> Vec<([u8; 16], DeviceId)> {
+        let intents = match self.intents.read() {
+            Ok(i) => i,
+            Err(_) => return vec![],
+        };
+        let mut result = Vec::new();
+        for (id, intent) in intents.iter() {
+            if intent.target == target
+                && let IntentState::Pending { .. } = &intent.state
+            {
+                result.push((*id, intent.initiator));
+            }
+        }
+        result
+    }
 }

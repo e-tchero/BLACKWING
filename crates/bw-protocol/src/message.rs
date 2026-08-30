@@ -185,7 +185,22 @@ impl ProtocolMessage {
     /// # Returns
     ///
     /// The deserialized `ProtocolMessage`, or `ProtocolError` on failure.
+    /// Maximum serialized size of a ProtocolMessage (4 MiB).
+    /// Must match MAX_REASSEMBLED_SIZE in bw-session to prevent
+    /// allocation through CBOR deserialization.
+    pub const MAX_DESER_SIZE: usize = 4 * 1024 * 1024;
+
+    /// Deserializes a byte slice into a structured `ProtocolMessage`.
+    ///
+    /// Rejects payloads exceeding `MAX_DESER_SIZE` before CBOR allocation.
     pub fn deserialize(bytes: &[u8]) -> Result<Self, ProtocolError> {
+        // C3 FIX: reject oversized payloads before CBOR allocation.
+        if bytes.len() > Self::MAX_DESER_SIZE {
+            return Err(ProtocolError::OversizedPayload(
+                bytes.len(),
+                Self::MAX_DESER_SIZE,
+            ));
+        }
         ciborium::de::from_reader(bytes).map_err(|_| ProtocolError::DeserializationError)
     }
 

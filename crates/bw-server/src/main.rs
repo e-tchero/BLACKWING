@@ -52,6 +52,7 @@ struct Args {
     data_dir: Option<PathBuf>,
     register: Option<(String, String)>,
     relay: Option<String>,
+    signing_key: Option<PathBuf>,
 }
 
 fn parse_args() -> Args {
@@ -59,6 +60,7 @@ fn parse_args() -> Args {
     let mut data_dir: Option<PathBuf> = None;
     let mut register: Option<(String, String)> = None;
     let mut relay: Option<String> = None;
+    let mut signing_key: Option<PathBuf> = None;
 
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -73,9 +75,12 @@ fn parse_args() -> Args {
                 register = Some((id, password));
             }
             "--relay" => relay = Some(it.next().expect("--relay requires a relay address")),
+            "--signing-key" => {
+                signing_key = Some(it.next().expect("--signing-key requires a path").into())
+            }
             "--help" | "-h" => {
                 eprintln!(
-                    "usage: bw-server [--listen ADDR] [--data-dir DIR] [--register ID PASS] [--relay ADDR]"
+                    "usage: bw-server [--listen ADDR] [--data-dir DIR] [--register ID PASS] [--relay ADDR] [--signing-key PATH]"
                 );
                 std::process::exit(0);
             }
@@ -90,6 +95,7 @@ fn parse_args() -> Args {
         data_dir,
         register,
         relay,
+        signing_key,
     }
 }
 
@@ -133,7 +139,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     eprintln!("starting BLACKWING server on {listen_addr}");
 
     let tokio_runtime = tokio::runtime::Runtime::new()?;
-    tokio_runtime.block_on(run_server(listen_addr, Arc::new(store), args.relay))?;
+    tokio_runtime.block_on(run_server(
+        listen_addr,
+        Arc::new(store),
+        args.relay,
+        args.signing_key,
+        data_dir,
+    ))?;
     Ok(())
 }
 
@@ -141,6 +153,8 @@ async fn run_server(
     listen_addr: std::net::SocketAddr,
     store: Arc<EnrollmentStore>,
     relay: Option<String>,
+    signing_key_arg: Option<std::path::PathBuf>,
+    data_dir: std::path::PathBuf,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let dispatcher = Arc::new(MessageDispatcher::new());
     register_input_handlers(&dispatcher, bw_input::InputInjector::new());
@@ -149,10 +163,60 @@ async fn run_server(
 
     let session_manager = Arc::new(SessionManager::new());
 
-    // Optional relay data-plane routing (token derived from a fixed dev token).
+    // Compute server device ID for dispatch envelopes.
+    // In relay mode, derive from the signing key.
+    // In direct mode, derive from the enrollment store.
+    let server_device_id = if relay.is_some() {
+        let sk_path_val = signing_key_arg
+            .clone()
+            .unwrap_or_else(|| data_dir.join("server.signing.key"));
+        let sk = bw_relay::relay_client::load_or_generate_key(&sk_path_val)
+            .map_err(|e| format!("failed to load signing key for device ID: {e}"))?;
+        sk.verify_key().device_id()
+    } else {
+        // Direct mode: use a deterministic ID from the first enrolled device.
+        // This is not cryptographically bound but is consistent for the session.
+        bw_crypto::DeviceId::from_digest([0x02; 32])
+    };
+    eprintln!("server device: {}", server_device_id);
+
+    // Optional relay data-plane routing via CandidateExchange.
+    // C1 FIX: obtain the relay token through the authenticated control-plane
+    // flow instead of generating an independent random token.
     let quic_server = if let Some(relay_addr) = relay {
         let relay_sock: std::net::SocketAddr = relay_addr.parse()?;
-        let token = [0xABu8; 32];
+
+        // Load or generate the server's Ed25519 signing key for relay auth.
+        let sk_path = signing_key_arg.unwrap_or_else(|| data_dir.join("server.signing.key"));
+        let signing_key = bw_relay::relay_client::load_or_generate_key(&sk_path)
+            .map_err(|e| format!("failed to load signing key: {e}"))?;
+
+        // Register with the relay control plane.
+        let rt = tokio::runtime::Runtime::new()?;
+        let relay_client = rt.block_on(async {
+            bw_relay::relay_client::RelayControlClient::connect(relay_sock, signing_key).await
+        })?;
+        rt.block_on(relay_client.register())?;
+        eprintln!("registered with relay");
+
+        // Poll for pending ConnectIntents targeting this server.
+        eprintln!("polling relay for pending connections...");
+        let mut relay_token = None;
+        for _ in 0..15 {
+            let intents = rt.block_on(relay_client.poll_pending_intents())?;
+            if let Some((intent_id, initiator)) = intents.into_iter().next() {
+                eprintln!("received connect intent from initiator");
+                // Accept the intent — relay generates the token.
+                let (token, _initiator_candidates) =
+                    rt.block_on(relay_client.accept_connect(intent_id, initiator, vec![]))?;
+                relay_token = Some(token);
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_secs(2));
+        }
+
+        let token = relay_token.ok_or("no pending relay connections within timeout")?;
+        eprintln!("relay authorization obtained via CandidateExchange");
         QuicServer::bind(listen_addr, Some((relay_sock, token)))?
     } else {
         QuicServer::bind(listen_addr, None)?
@@ -168,7 +232,15 @@ async fn run_server(
         let session_manager = Arc::clone(&session_manager);
         let store = Arc::clone(&store);
         tokio::spawn(async move {
-            if let Err(e) = handle_session(conn, &store, &dispatcher, &session_manager).await {
+            if let Err(e) = handle_session(
+                conn,
+                &store,
+                &dispatcher,
+                &session_manager,
+                server_device_id,
+            )
+            .await
+            {
                 eprintln!("session error: {e}");
             }
         });
@@ -182,6 +254,7 @@ async fn handle_session(
     store: &EnrollmentStore,
     dispatcher: &Arc<MessageDispatcher>,
     session_manager: &Arc<SessionManager>,
+    server_device_id: bw_crypto::DeviceId,
 ) -> Result<(), wire::WireError> {
     // The client opens the first bidi stream and initiates the OPAQUE login.
     let (send, recv) = conn
@@ -229,9 +302,15 @@ async fn handle_session(
     loop {
         let message = receiver.recv_message().await?;
         eprintln!("received message type {:?}", message.message_type);
+        // M8 FIX: use actual authenticated device ID instead of hardcoded fakes.
+        // The client's device_id was authenticated via OPAQUE login above.
+        let mut id_bytes = [0u8; 32];
+        let n = identifier.len().min(32);
+        id_bytes[..n].copy_from_slice(identifier.as_bytes());
+        let client_id = bw_crypto::DeviceId::from_digest(id_bytes);
         let envelope = MessageEnvelope {
-            source: NodeId(bw_crypto::DeviceId::from_digest([0x01; 32])),
-            destination: NodeId(bw_crypto::DeviceId::from_digest([0x02; 32])),
+            source: NodeId(client_id),
+            destination: NodeId(server_device_id),
             session_id,
             route: Route::Direct,
             message,

@@ -291,6 +291,27 @@ impl SigningKey {
             SigningKeyInner::Tpm(k) => Signature(k.sign(message)),
         }
     }
+
+    /// Returns the raw 32-byte Ed25519 secret key for persistence.
+    ///
+    /// The returned bytes must be kept secret. They can be loaded back via
+    /// SigningKey::from_secret_bytes to restore the same identity.
+    pub fn to_bytes(&self) -> [u8; 32] {
+        match &self.inner {
+            SigningKeyInner::Dalek(k) => k.to_bytes(),
+            SigningKeyInner::Tpm(_) => panic!("TPM keys cannot be serialized to bytes"),
+        }
+    }
+
+    /// Restores a signing key from raw 32-byte secret bytes previously
+    /// obtained via SigningKey::to_bytes.
+    pub fn from_secret_bytes(bytes: [u8; 32]) -> crate::error::Result<Self> {
+        Ok(Self {
+            inner: crate::backend::SigningKeyInner::Dalek(
+                crate::backend::dalek::DalekSigningKey::from_secret(bytes),
+            ),
+        })
+    }
 }
 
 /// Concrete, backend-agnostic public verification key wrapper.

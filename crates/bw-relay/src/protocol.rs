@@ -3,6 +3,15 @@ use bw_crypto::DeviceId;
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 
+/// Information about a pending connect intent returned by polling.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingIntentInfo {
+    /// The device ID of the initiator.
+    pub from: DeviceId,
+    /// The intent identifier.
+    pub intent_id: Vec<u8>,
+}
+
 /// All control messages exchanged between endpoints and the relay server.
 ///
 /// The relay operates purely on the control plane. It never handles
@@ -156,5 +165,22 @@ pub enum RelayMessage {
     RelayEstablishAck {
         /// The intent identifier.
         intent_id: Vec<u8>,
+    },
+
+    // ─── Phase 4: Server-Side Polling ────────────────────────────────────────
+    /// Server polls the relay for pending ConnectIntents targeting its DeviceId.
+    ///
+    /// The relay returns any stored ConnectInvite messages that have not yet
+    /// been accepted. This enables the server to discover incoming connection
+    /// requests without maintaining a persistent connection to the relay.
+    PollPendingIntents {
+        /// The server's device ID (must be registered).
+        device_id: DeviceId,
+    },
+
+    /// Response containing pending ConnectIntents for the polling server.
+    PendingIntents {
+        /// List of pending ConnectInvite messages.
+        intents: Vec<PendingIntentInfo>,
     },
 }

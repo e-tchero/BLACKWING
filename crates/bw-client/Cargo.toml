@@ -16,6 +16,7 @@ bw-decoder = { version = "0.1.0", path = "../bw-decoder" }
 bw-encoder = { version = "0.1.0", path = "../bw-encoder" }
 bw-ice = { version = "0.1.0", path = "../bw-ice" }
 bw-protocol = { version = "0.1.0", path = "../bw-protocol" }
+bw-relay = { version = "0.1.0", path = "../bw-relay" }
 bw-session = { version = "0.1.0", path = "../bw-session" }
 bw-transport = { version = "0.1.0", path = "../bw-transport" }
 # pixels 0.16 -> wgpu 27 -> windows 0.58. pixels 0.17 -> wgpu 29 -> windows 0.62,

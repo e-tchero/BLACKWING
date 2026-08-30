@@ -64,4 +64,8 @@ pub enum ProtocolError {
     /// Replay attack detected.
     #[error("Replay attack detected")]
     ReplayDetected,
+
+    /// The payload exceeds the maximum allowed size.
+    #[error("Oversized payload ({0} bytes, max {1} bytes)")]
+    OversizedPayload(usize, usize),
 }

@@ -189,6 +189,11 @@ impl RelayServer {
                 peer_addr,
             ),
 
+            // ── Phase 4: Server-Side Polling ──────────────────────────────
+            RelayMessage::PollPendingIntents { device_id } => {
+                self.handle_poll_pending_intents(device_id)
+            }
+
             _ => Err(RelayError::Internal(
                 "Message type not valid for server-side processing".into(),
             )),
@@ -459,6 +464,26 @@ impl RelayServer {
         self.rendezvous
             .peek_initiator(intent_id)
             .map_err(|e| RelayError::Internal(e.into()))
+    }
+
+    fn handle_poll_pending_intents(&self, device_id: DeviceId) -> Result<RelayMessage, RelayError> {
+        // Verify the device is registered
+        if !self.is_registered(&device_id) {
+            return Err(RelayError::AuthFailed("Device not registered"));
+        }
+
+        let pending = self.rendezvous.pending_for(device_id);
+        let intents: Vec<crate::protocol::PendingIntentInfo> = pending
+            .into_iter()
+            .map(
+                |(intent_id, initiator)| crate::protocol::PendingIntentInfo {
+                    from: initiator,
+                    intent_id: intent_id.to_vec(),
+                },
+            )
+            .collect();
+
+        Ok(RelayMessage::PendingIntents { intents })
     }
 
     fn handle_relay_establish(

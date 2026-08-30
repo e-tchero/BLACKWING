@@ -25,6 +25,10 @@ impl DalekSigningKey {
             public: key.verifying_key(),
         }
     }
+
+    pub(crate) fn to_bytes(&self) -> [u8; 32] {
+        self.secret
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]

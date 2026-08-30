@@ -22,6 +22,7 @@ bw-encoder = { version = "0.1.0", path = "../bw-encoder" }
 bw-ice = { version = "0.1.0", path = "../bw-ice" }
 bw-input = { version = "0.1.0", path = "../bw-input" }
 bw-protocol = { version = "0.1.0", path = "../bw-protocol" }
+bw-relay = { version = "0.1.0", path = "../bw-relay" }
 bw-session = { version = "0.1.0", path = "../bw-session" }
 bw-transport = { version = "0.1.0", path = "../bw-transport" }
 quinn = "0.11"

@@ -448,3 +448,55 @@ fn test_video_data_requires_payload() {
         Some(ProtocolError::InvalidPayloadLength)
     );
 }
+
+// ── C3 regression: oversized payload rejection ──────────────────────
+
+#[test]
+fn test_oversized_payload_rejected_before_deserialization() {
+    // C3 FIX: payloads exceeding MAX_DESER_SIZE are rejected before
+    // ciborium allocation, preventing OOM from malicious CBOR.
+    let oversized = vec![0xABu8; ProtocolMessage::MAX_DESER_SIZE + 1];
+    let result = ProtocolMessage::deserialize(&oversized);
+    assert!(result.is_err(), "oversized payload must be rejected");
+    match result.unwrap_err() {
+        ProtocolError::OversizedPayload(actual, max) => {
+            assert_eq!(actual, ProtocolMessage::MAX_DESER_SIZE + 1);
+            assert_eq!(max, ProtocolMessage::MAX_DESER_SIZE);
+        }
+        other => panic!("expected OversizedPayload, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_exactly_max_payload_accepted() {
+    // At exactly MAX_DESER_SIZE, deserialization should proceed (may fail
+    // with DeserializationError for invalid CBOR, but not OversizedPayload).
+    let at_limit = vec![0xABu8; ProtocolMessage::MAX_DESER_SIZE];
+    let result = ProtocolMessage::deserialize(&at_limit);
+    // Invalid CBOR is expected — the point is it is NOT OversizedPayload.
+    assert!(
+        !matches!(result, Err(ProtocolError::OversizedPayload(_, _))),
+        "exactly-at-limit payload must not be rejected as oversized"
+    );
+}
+
+#[test]
+fn test_normal_message_passes_size_check() {
+    // A real serialized message must pass the size check.
+    let msg = ProtocolMessage::keyboard_event(0x41, true).unwrap();
+    let serialized = msg.serialize().unwrap();
+    assert!(serialized.len() < ProtocolMessage::MAX_DESER_SIZE);
+    let deserialized = ProtocolMessage::deserialize(&serialized).unwrap();
+    assert_eq!(deserialized.message_type, MessageType::InputKeyboard);
+}
+
+#[test]
+fn test_oversized_encrypted_frame_rejected() {
+    use bw_protocol::encryption::EncryptedFrame;
+    let oversized = vec![0xABu8; EncryptedFrame::MAX_DESER_SIZE + 1];
+    let result = EncryptedFrame::deserialize(&oversized);
+    assert!(
+        result.is_err(),
+        "oversized encrypted frame must be rejected"
+    );
+}

@@ -24,6 +24,10 @@ const FRAGMENT_SIZE: usize = 60_000;
 /// Header `flags` bit meaning "more fragments follow this one".
 const FLAG_FRAGMENT_MORE: u16 = 0x0001;
 
+/// Maximum total size of a reassembled message in bytes (4 MiB).
+/// Must match the limit in `wire.rs`.
+const MAX_REASSEMBLED_SIZE: usize = 4 * 1024 * 1024;
+
 /// Encodes fragment metadata into the header `flags` field:
 /// bit 0 = "more fragments follow", bits 1..=15 = fragment index.
 fn fragment_flags(index: u16, more: bool) -> u16 {
@@ -54,6 +58,9 @@ pub enum SecureConnError {
     /// Fragments of a large message arrived out of order or with a gap.
     #[error("fragmented message out of order")]
     FragmentOutOfOrder,
+    /// The reassembled message exceeds the maximum allowed size.
+    #[error("reassembled message too large ({0} bytes, max 4 MiB)")]
+    OversizedMessage(usize),
 }
 
 /// A secure, encrypted session built on a QUIC protocol adapter.
@@ -302,6 +309,11 @@ impl SecureConnection {
             if u32::from(frag_index) != expected {
                 return Err(SecureConnError::FragmentOutOfOrder);
             }
+            // C2 FIX: enforce reassembly size limit.
+            let new_len = payload.len() + fragment.payload.len();
+            if new_len > MAX_REASSEMBLED_SIZE {
+                return Err(SecureConnError::OversizedMessage(new_len));
+            }
             payload.extend_from_slice(fragment.payload);
             expected += 1;
         }
@@ -430,6 +442,11 @@ impl SecureReceiver {
             more = (fragment.header.flags & FLAG_FRAGMENT_MORE) != 0;
             if u32::from(frag_index) != expected {
                 return Err(SecureConnError::FragmentOutOfOrder);
+            }
+            // C2 FIX: enforce reassembly size limit.
+            let new_len = payload.len() + fragment.payload.len();
+            if new_len > MAX_REASSEMBLED_SIZE {
+                return Err(SecureConnError::OversizedMessage(new_len));
             }
             payload.extend_from_slice(fragment.payload);
             expected += 1;

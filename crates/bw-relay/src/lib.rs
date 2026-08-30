@@ -23,6 +23,8 @@ pub mod clock;
 pub mod forwarding;
 /// Signaling protocol for registration, discovery, and rendezvous.
 pub mod protocol;
+/// Relay control-plane client for bw-client and bw-server.
+pub mod relay_client;
 /// Rendezvous state machine managing connect-intent lifecycle.
 pub mod rendezvous;
 /// Relay server that authenticates endpoints and mediates candidate exchange.

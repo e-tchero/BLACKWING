@@ -55,6 +55,8 @@ struct Args {
     id: String,
     password: String,
     relay: Option<String>,
+    target_id: Option<String>,
+    signing_key: Option<std::path::PathBuf>,
 }
 
 fn parse_args() -> Args {
@@ -62,6 +64,8 @@ fn parse_args() -> Args {
     let mut id: Option<String> = None;
     let mut password: Option<String> = None;
     let mut relay: Option<String> = None;
+    let mut target_id: Option<String> = None;
+    let mut signing_key: Option<std::path::PathBuf> = None;
 
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -72,8 +76,16 @@ fn parse_args() -> Args {
                 password = Some(it.next().expect("--password requires a value"));
             }
             "--relay" => relay = Some(it.next().expect("--relay requires a relay address")),
+            "--target-id" => target_id = Some(it.next().expect("--target-id requires a device id")),
+            "--signing-key" => {
+                signing_key = Some(std::path::PathBuf::from(
+                    it.next().expect("--signing-key requires a path"),
+                ))
+            }
             "--help" | "-h" => {
-                eprintln!("usage: bw-client --server ADDR --id ID --password PASS [--relay ADDR]");
+                eprintln!(
+                    "usage: bw-client --server ADDR --id ID --password PASS [--relay ADDR] [--target-id ID] [--signing-key PATH]"
+                );
                 std::process::exit(0);
             }
             other => {
@@ -87,6 +99,8 @@ fn parse_args() -> Args {
         id: id.expect("--id is required"),
         password: password.expect("--password is required"),
         relay,
+        target_id,
+        signing_key,
     }
 }
 
@@ -391,10 +405,12 @@ fn build_dispatcher() -> Arc<MessageDispatcher> {
 fn handle_incoming_message(
     dispatcher: &MessageDispatcher,
     message: ProtocolMessage,
+    client_id: bw_crypto::DeviceId,
+    server_id: bw_crypto::DeviceId,
 ) -> Result<(), DispatchError> {
     let envelope = MessageEnvelope {
-        source: NodeId(bw_crypto::DeviceId::from_digest([0x02; 32])),
-        destination: NodeId(bw_crypto::DeviceId::from_digest([0x01; 32])),
+        source: NodeId(server_id),
+        destination: NodeId(client_id),
         session_id: SessionId([0u8; 16]),
         route: Route::Direct,
         message,
@@ -806,9 +822,50 @@ async fn run_session(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let server_addr: std::net::SocketAddr = args.server.parse()?;
 
+    // C1 FIX: obtain relay token through CandidateExchange control-plane flow.
+    let mut relay_target_id: Option<bw_crypto::DeviceId> = None;
+    let mut client_device_id = bw_crypto::DeviceId::from_digest([0x01; 32]); // default for direct mode
     let quic_client = if let Some(relay_addr) = &args.relay {
         let relay_sock: std::net::SocketAddr = relay_addr.parse()?;
-        let token = [0xABu8; 32];
+
+        // Load or generate the client's Ed25519 signing key for relay auth.
+        let sk_path = args
+            .signing_key
+            .clone()
+            .unwrap_or_else(|| std::path::PathBuf::from("client.signing.key"));
+        let signing_key = bw_relay::relay_client::load_or_generate_key(&sk_path)
+            .map_err(|e| format!("failed to load signing key: {e}"))?;
+        client_device_id = signing_key.verify_key().device_id();
+        eprintln!("client device: {}", client_device_id);
+
+        // Parse the target device ID (server's identity).
+        let target_id_str = args
+            .target_id
+            .as_ref()
+            .ok_or("--target-id is required for relay mode")?;
+        let target_id: bw_crypto::DeviceId = target_id_str
+            .parse()
+            .map_err(|e| format!("invalid target-id: {e}"))?;
+        relay_target_id = Some(target_id);
+
+        // Register with the relay control plane.
+        let rt = tokio::runtime::Runtime::new()?;
+        let relay_client = rt.block_on(async {
+            bw_relay::relay_client::RelayControlClient::connect(relay_sock, signing_key).await
+        })?;
+        rt.block_on(relay_client.register())?;
+        eprintln!("registered with relay");
+
+        // Send ConnectIntent targeting the server.
+        let intent_id = bw_relay::relay_client::generate_intent_id();
+        rt.block_on(relay_client.connect_intent(target_id, intent_id, vec![]))?;
+        eprintln!("connect intent sent");
+
+        // Wait briefly for the server to accept, then get the token.
+        std::thread::sleep(std::time::Duration::from_secs(3));
+        let (token, _server_candidates) = rt.block_on(relay_client.get_candidates(intent_id))?;
+        eprintln!("relay authorization obtained via CandidateExchange");
+
         QuicClient::bind(Some((relay_sock, token)))?
     } else {
         QuicClient::bind(None)?
@@ -863,6 +920,8 @@ async fn run_session(
 
     // Receiver task: decode video frames into the display channel and route
     // control messages (clipboard/audio) to the dispatcher.
+    // Server DeviceId: use target_id from relay mode, or a default for direct mode.
+    let server_id = relay_target_id.unwrap_or_else(|| bw_crypto::DeviceId::from_digest([0x02; 32]));
     let frame_tx = frame_tx.clone();
     let dispatcher = Arc::clone(dispatcher);
     let recv_task = tokio::spawn(async move {
@@ -906,7 +965,9 @@ async fn run_session(
                         Err(e) => eprintln!("video decode failed: {e}"),
                     }
                 }
-            } else if let Err(e) = handle_incoming_message(&dispatcher, message) {
+            } else if let Err(e) =
+                handle_incoming_message(&dispatcher, message, client_device_id, server_id)
+            {
                 eprintln!("dispatch error: {e}");
             }
         }
@@ -1057,7 +1118,12 @@ mod tests {
         // On Windows, the clipboard may be held by another process (e.g. a
         // live session). Treat clipboard-write failures as a skip, not a
         // hard failure — the dispatch path is still validated.
-        match handle_incoming_message(&dispatcher, message) {
+        match handle_incoming_message(
+            &dispatcher,
+            message,
+            bw_crypto::DeviceId::from_digest([0x01; 32]),
+            bw_crypto::DeviceId::from_digest([0x02; 32]),
+        ) {
             Ok(()) => {
                 let mut manager = clipboard.lock().unwrap_or_else(|e| e.into_inner());
                 assert_eq!(manager.get_text().unwrap(), "remote clipboard from server");
@@ -1085,7 +1151,13 @@ mod tests {
             flags: 0,
             payload: vec![0xde, 0xad, 0xbe, 0xef],
         };
-        let err = handle_incoming_message(&dispatcher, message).unwrap_err();
+        let err = handle_incoming_message(
+            &dispatcher,
+            message,
+            bw_crypto::DeviceId::from_digest([0x01; 32]),
+            bw_crypto::DeviceId::from_digest([0x02; 32]),
+        )
+        .unwrap_err();
         assert!(matches!(err, DispatchError::Handler(_)));
     }
 
@@ -1112,7 +1184,15 @@ mod tests {
             opus_data,
         })
         .expect("audio message");
-        assert!(handle_incoming_message(&dispatcher, message).is_ok());
+        assert!(
+            handle_incoming_message(
+                &dispatcher,
+                message,
+                bw_crypto::DeviceId::from_digest([0x01; 32]),
+                bw_crypto::DeviceId::from_digest([0x02; 32])
+            )
+            .is_ok()
+        );
     }
 
     // ------------------------------------------------------------------

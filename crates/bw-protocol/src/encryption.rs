@@ -60,8 +60,18 @@ impl EncryptedFrame {
         Ok(buffer)
     }
 
+    /// Maximum serialized size of an EncryptedFrame (4 MiB).
+    pub const MAX_DESER_SIZE: usize = 4 * 1024 * 1024;
+
     /// Deserializes an encrypted frame from CBOR bytes.
     pub fn deserialize(bytes: &[u8]) -> Result<Self, ProtocolError> {
+        // C3 FIX: reject oversized payloads before CBOR allocation.
+        if bytes.len() > Self::MAX_DESER_SIZE {
+            return Err(ProtocolError::OversizedPayload(
+                bytes.len(),
+                Self::MAX_DESER_SIZE,
+            ));
+        }
         ciborium::from_reader(bytes).map_err(|_| ProtocolError::DeserializationError)
     }
 }
