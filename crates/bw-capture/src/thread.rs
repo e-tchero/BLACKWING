@@ -132,9 +132,7 @@ impl CaptureThread {
                                             refresh_frame.cursor = Some(cursor);
                                         }
 
-                                        if frame_tx.blocking_send(refresh_frame).is_err() {
-                                            break; // Receiver dropped
-                                        }
+                                        let _ = frame_tx.try_send(refresh_frame);
                                         // Reset timer so we don't spam refreshes
                                         last_real_frame_time = Instant::now();
                                     }
@@ -154,15 +152,21 @@ impl CaptureThread {
                             last_frame = Some(frame.clone());
                             last_real_frame_time = Instant::now();
 
-                            if frame_tx.blocking_send(frame).is_err() {
-                                break; // Receiver dropped
-                            }
+                            // LATENCY FIX: use try_send so if the
+                            // downstream pipeline is full, we drop this
+                            // frame and capture the next one instead of
+                            // blocking and queuing stale frames.
+                            let _ = frame_tx.try_send(frame);
+                        }
+                        Err(crate::CaptureError::Stopped) => {
+                            // Intentional stop — exit the capture loop.
+                            break;
                         }
                         Err(e) => {
                             eprintln!("Capture thread error: {:?}", e);
-                            // Attempt recovery: stop and re-start the backend.
-                            // This handles DXGI_ERROR_ACCESS_LOST which occurs
-                            // during display mode changes, lock screens, or UAC.
+                            // Attempt recovery for transient errors (e.g.
+                            // DXGI_ERROR_ACCESS_LOST during display mode
+                            // changes, lock screens, or UAC).
                             backend.stop();
                             thread::sleep(Duration::from_millis(200));
                             if backend.start(&display).is_ok() {

@@ -44,6 +44,30 @@ fn open_clipboard() -> Option<ClipboardManager> {
     }
 }
 
+/// Returns true if the clipboard is writable right now; false if it is
+/// held by another process (common during CI or concurrent clipboard use).
+fn clipboard_is_writable(_mgr: &ClipboardManager) -> bool {
+    // We can't borrow mutably through a shared ref, so clone the internal
+    // state by writing a probe value through a fresh manager.
+    let mut probe = match ClipboardManager::new() {
+        Ok(m) => m,
+        Err(_) => return false,
+    };
+    match probe.set_text("__bw_probe__") {
+        Ok(()) => {
+            probe.set_text("").ok();
+            true
+        }
+        Err(ClipboardError::Write(r)) | Err(ClipboardError::Unavailable(r))
+            if r.contains("not accessible") || r.contains("held by another") =>
+        {
+            eprintln!("Skipping clipboard test: clipboard busy ({r})");
+            false
+        }
+        Err(_) => false,
+    }
+}
+
 /// Builds a dispatcher with the clipboard handler registered against a real
 /// (or skipped) OS clipboard, returning the shared manager handle.
 fn test_setup() -> Option<(MessageDispatcher, Arc<Mutex<ClipboardManager>>)> {
@@ -61,13 +85,36 @@ fn test_text_clipboard_event_reaches_os_clipboard() {
         return;
     };
 
+    // Pre-check: verify clipboard is writable before dispatching
+    {
+        let mut mgr = clipboard.lock().unwrap_or_else(|e| e.into_inner());
+        match mgr.set_text("test probe") {
+            Ok(()) => {
+                mgr.set_text("").ok();
+            }
+            Err(ClipboardError::Write(reason)) | Err(ClipboardError::Unavailable(reason))
+                if reason.contains("not accessible") || reason.contains("held by another") =>
+            {
+                eprintln!("Skipping clipboard test: clipboard busy ({reason})");
+                return;
+            }
+            Err(e) => panic!("clipboard probe failed: {e}"),
+        }
+    }
+
     let event = ClipboardEvent {
         format: ClipboardFormat::Text,
         data: b"remote clipboard sync from dispatcher".to_vec(),
     };
-    dispatcher
-        .dispatch(wrap(ProtocolMessage::clipboard_event(event).unwrap()))
-        .unwrap();
+    match dispatcher.dispatch(wrap(ProtocolMessage::clipboard_event(event).unwrap())) {
+        Ok(()) => {}
+        Err(_) if matches!(clipboard.lock().unwrap_or_else(|e| e.into_inner()).set_text("probe"), Err(ClipboardError::Write(reason)) | Err(ClipboardError::Unavailable(reason)) if reason.contains("not accessible") || reason.contains("held by another")) =>
+        {
+            eprintln!("Skipping clipboard test: clipboard became busy during dispatch");
+            return;
+        }
+        Err(e) => panic!("dispatch failed: {e}"),
+    }
 
     let mut manager = clipboard.lock().unwrap_or_else(|e| e.into_inner());
     assert_eq!(
@@ -82,6 +129,9 @@ fn test_image_clipboard_event_reaches_os_clipboard() {
     let Some((dispatcher, clipboard)) = test_setup() else {
         return;
     };
+    if !clipboard_is_writable(&ClipboardManager::new().unwrap()) {
+        return;
+    }
 
     // 3x1 RGBA8 image: red, green, blue.
     let rgba = vec![

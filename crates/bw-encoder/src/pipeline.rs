@@ -21,12 +21,23 @@ impl EncoderPipeline {
             .spawn(move || {
                 let mut sequence = 0;
 
-                // Keep reading frames as long as the channel is open
-                while let Some(frame) = frame_rx.blocking_recv() {
+                // Keep reading frames as long as the channel is open.
+                //
+                // LATENCY FIX: Instead of encoding every frame (which causes
+                // massive queuing lag), we drain the channel to the newest
+                // frame before encoding. If 5 frames are queued, we encode
+                // only the last one — keeping latency at ~1 frame instead of
+                // accumulating a backlog of stale frames.
+                while let Some(mut frame) = frame_rx.blocking_recv() {
+                    // Drain any newer frames that arrived while we were
+                    // blocked — keep only the most recent.
+                    while let Ok(newer) = frame_rx.try_recv() {
+                        frame = newer;
+                    }
+
                     // Periodic refresh frames must produce an IDR keyframe so
                     // the client can resync its decode reference chain after
-                    // idle periods. Without this, the decoder would attempt to
-                    // decode P-frames against a stale reference.
+                    // idle periods.
                     if frame.is_refresh {
                         backend.force_keyframe();
                     }
@@ -37,25 +48,16 @@ impl EncoderPipeline {
                                 Ok(_) => sequence += 1,
                                 Err(mpsc::error::TrySendError::Full(_)) => {
                                     // Backpressure: channel is full, drop the frame.
-                                    // Force the next encoded frame to be a keyframe so a
-                                    // client that missed this reference frame can resync —
-                                    // otherwise the whole P-frame reference chain is lost.
-                                    eprintln!(
-                                        "EncoderPipeline: Dropping frame {} due to backpressure; forcing keyframe",
-                                        sequence
-                                    );
+                                    // Force keyframe so client can resync.
                                     backend.force_keyframe();
                                 }
                                 Err(mpsc::error::TrySendError::Closed(_)) => {
-                                    // Receiver dropped, stop encoding
                                     break;
                                 }
                             }
                         }
                         Err(e) => {
                             eprintln!("Encoder error: {:?}", e);
-                            // We could choose to break or continue; typically we might continue
-                            // to see if the next frame encodes successfully.
                         }
                     }
                 }

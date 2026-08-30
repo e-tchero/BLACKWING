@@ -44,7 +44,7 @@ use bw_transport::adapter::QuicProtocolAdapter;
 use tokio::sync::mpsc;
 
 const DEFAULT_LISTEN: &str = "0.0.0.0:9000";
-const FRAME_CAPACITY: usize = 16;
+const FRAME_CAPACITY: usize = 4;
 
 /// Simple positional/flag argument parser.
 struct Args {
@@ -276,6 +276,10 @@ fn spawn_video_pipeline(out_tx: mpsc::Sender<ProtocolMessage>) {
         .name("bw-cursor-compositor".into())
         .spawn(move || {
             while let Some(mut frame) = frame_rx.blocking_recv() {
+                // LATENCY FIX: drain to newest frame before compositing.
+                while let Ok(newer) = frame_rx.try_recv() {
+                    frame = newer;
+                }
                 // Composite the cursor overlay onto the frame buffer if
                 // cursor data is available.
                 if let Some(cursor) = &frame.cursor {

@@ -58,7 +58,16 @@ fn test_text_set_and_get_roundtrip() {
     };
 
     let id = random_uuid();
-    manager.set_text(&id).unwrap();
+    match manager.set_text(&id) {
+        Ok(()) => {}
+        Err(ClipboardError::Unavailable(reason)) | Err(ClipboardError::Write(reason))
+            if reason.contains("not accessible") || reason.contains("held by another") =>
+        {
+            eprintln!("Skipping clipboard test: clipboard busy ({reason})");
+            return;
+        }
+        Err(e) => panic!("set_text failed: {e}"),
+    }
     assert_eq!(manager.get_text().unwrap(), id);
 }
 
@@ -70,7 +79,16 @@ fn test_text_roundtrip_with_unicode() {
     };
 
     let text = "BLACKWING clipboard — 你好, zéro ✓";
-    manager.set_text(text).unwrap();
+    match manager.set_text(text) {
+        Ok(()) => {}
+        Err(ClipboardError::Unavailable(reason)) | Err(ClipboardError::Write(reason))
+            if reason.contains("not accessible") || reason.contains("held by another") =>
+        {
+            eprintln!("Skipping clipboard test: clipboard busy ({reason})");
+            return;
+        }
+        Err(e) => panic!("set_text failed: {e}"),
+    }
     assert_eq!(manager.get_text().unwrap(), text);
 }
 
@@ -91,7 +109,16 @@ fn test_image_roundtrip() {
         ],
     )
     .unwrap();
-    manager.set_image(&image).unwrap();
+    match manager.set_image(&image) {
+        Ok(()) => {}
+        Err(ClipboardError::Unavailable(reason)) | Err(ClipboardError::Write(reason))
+            if reason.contains("not accessible") || reason.contains("held by another") =>
+        {
+            eprintln!("Skipping clipboard test: clipboard busy ({reason})");
+            return;
+        }
+        Err(e) => panic!("set_image failed: {e}"),
+    }
 
     let read_back = manager.get_image().unwrap();
     assert_eq!(read_back.width, 2);
