@@ -222,22 +222,50 @@ async fn run_server(
 
     let session_manager = Arc::new(SessionManager::new());
 
-    // Compute server device ID for dispatch envelopes.
-    // In relay mode, derive from the signing key.
-    // In direct mode, derive from the enrollment store.
-    let server_device_id = if relay.is_some() {
-        let sk_path_val = signing_key_arg
-            .clone()
-            .unwrap_or_else(|| data_dir.join("server.signing.key"));
-        let sk = bw_relay::relay_client::load_or_generate_key(&sk_path_val)
-            .map_err(|e| format!("failed to load signing key for device ID: {e}"))?;
-        sk.verify_key().device_id()
-    } else {
-        // Direct mode: use a deterministic ID from the first enrolled device.
-        // This is not cryptographically bound but is consistent for the session.
-        bw_crypto::DeviceId::from_digest([0x02; 32])
-    };
+    // H5 FIX: Load/generate the server's Ed25519 TLS keypair.
+    // The TLS keypair is used for:
+    //   1. TLS certificate generation (certificate pinning)
+    //   2. Device identity derivation (SHA-256 of public key = DeviceId)
+    let tls_key_path = data_dir.join("server.tls.key");
+    let tls_keypair = bw_transport::cert::load_or_generate_tls_keypair(&tls_key_path)
+        .map_err(|e| format!("failed to load TLS keypair: {e}"))?;
+    let server_device_id = bw_transport::cert::device_id_from_keypair(&tls_keypair);
     eprintln!("server device: {}", server_device_id);
+
+    // Also load the relay/OPAQUE signing key (separate from TLS key).
+    let sk_path_val = signing_key_arg
+        .clone()
+        .unwrap_or_else(|| data_dir.join("server.signing.key"));
+    let server_signing_key = bw_relay::relay_client::load_or_generate_key(&sk_path_val)
+        .map_err(|e| format!("failed to load signing key: {e}"))?;
+
+    // Compute Subject Alternative Names for the TLS certificate.
+    // H6 FIX: Use actual listen address SANs instead of hardcoded "localhost".
+    let mut san_listeners: Vec<String> = vec!["127.0.0.1".into()];
+    match listen_addr {
+        std::net::SocketAddr::V4(v4) => {
+            let ip_str = v4.ip().to_string();
+            if ip_str == "0.0.0.0" {
+                // When binding to 0.0.0.0, determine the LAN IP for LAN clients.
+                if let Ok(socket) = std::net::UdpSocket::bind("0.0.0.0:0")
+                    && socket.connect("8.8.8.8:80").is_ok()
+                    && let Ok(local_addr) = socket.local_addr()
+                    && let std::net::SocketAddr::V4(v4_addr) = local_addr
+                {
+                    let s = v4_addr.ip().to_string();
+                    if s != "127.0.0.1" && !san_listeners.contains(&s) {
+                        san_listeners.push(s);
+                    }
+                }
+            } else if ip_str != "127.0.0.1" {
+                san_listeners.push(ip_str);
+            }
+        }
+        std::net::SocketAddr::V6(v6) => {
+            san_listeners.push(v6.ip().to_string());
+        }
+    }
+    eprintln!("TLS certificate SANs: {:?}", san_listeners);
 
     // Optional relay data-plane routing via CandidateExchange.
     // C1 FIX: obtain the relay token through the authenticated control-plane
@@ -245,15 +273,11 @@ async fn run_server(
     let quic_server = if let Some(relay_addr) = relay {
         let relay_sock: std::net::SocketAddr = relay_addr.parse()?;
 
-        // Load or generate the server's Ed25519 signing key for relay auth.
-        let sk_path = signing_key_arg.unwrap_or_else(|| data_dir.join("server.signing.key"));
-        let signing_key = bw_relay::relay_client::load_or_generate_key(&sk_path)
-            .map_err(|e| format!("failed to load signing key: {e}"))?;
-
         // Register with the relay control plane.
         let rt = tokio::runtime::Runtime::new()?;
         let relay_client = rt.block_on(async {
-            bw_relay::relay_client::RelayControlClient::connect(relay_sock, signing_key).await
+            bw_relay::relay_client::RelayControlClient::connect(relay_sock, server_signing_key)
+                .await
         })?;
         rt.block_on(relay_client.register())?;
         eprintln!("registered with relay");
@@ -276,9 +300,14 @@ async fn run_server(
 
         let token = relay_token.ok_or("no pending relay connections within timeout")?;
         eprintln!("relay authorization obtained via CandidateExchange");
-        QuicServer::bind(listen_addr, Some((relay_sock, token)))?
+        QuicServer::bind(
+            listen_addr,
+            Some((relay_sock, token)),
+            &tls_keypair,
+            san_listeners,
+        )?
     } else {
-        QuicServer::bind(listen_addr, None)?
+        QuicServer::bind(listen_addr, None, &tls_keypair, san_listeners)?
     };
 
     // H3 FIX: admission control — semaphore + per-IP rate limiter.

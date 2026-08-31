@@ -92,9 +92,9 @@ async fn quic_handshake_and_data_over_ice() {
     let (client_ice, server_ice) = establish_ice_pair().await;
 
     // 2. Build Quinn endpoints on top of the ICE sockets.
-    let server = QuicServer::bind_with_ice(server_ice).expect("server should bind over ICE");
+    let server = QuicServer::bind_with_ice_dev(server_ice).expect("server should bind over ICE");
     let server_addr = server.endpoint.local_addr().expect("server has local addr");
-    let client = QuicClient::bind_with_ice(client_ice).expect("client should bind over ICE");
+    let client = QuicClient::bind_with_ice_dev(client_ice).expect("client should bind over ICE");
 
     // 3. Full QUIC handshake + stream exchange over the ICE path.
     let server_task = tokio::spawn(async move {

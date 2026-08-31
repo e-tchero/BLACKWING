@@ -78,7 +78,7 @@ async fn test_full_session_wire_exchange() {
     let server_manager = Arc::new(SessionManager::new());
 
     let server_addr: SocketAddr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0));
-    let quic_server = QuicServer::bind(server_addr, None).unwrap();
+    let quic_server = QuicServer::bind_dev(server_addr, None).unwrap();
     let bound_addr = quic_server.endpoint.local_addr().unwrap();
 
     let server_dispatcher = Arc::new(MessageDispatcher::new());
@@ -129,7 +129,7 @@ async fn test_full_session_wire_exchange() {
     });
 
     // ── Client side ────────────────────────────────────────────────────────
-    let quic_client = QuicClient::bind(None).unwrap();
+    let quic_client = QuicClient::bind_dev(None).unwrap();
     let conn = timeout(Duration::from_secs(10), quic_client.connect(bound_addr))
         .await
         .expect("connect within timeout")
@@ -183,7 +183,7 @@ async fn test_wrong_password_rejected() {
     let server_manager = Arc::new(SessionManager::new());
 
     let server_addr: SocketAddr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0));
-    let quic_server = QuicServer::bind(server_addr, None).unwrap();
+    let quic_server = QuicServer::bind_dev(server_addr, None).unwrap();
     let bound_addr = quic_server.endpoint.local_addr().unwrap();
 
     let accept_handle = tokio::spawn(async move {
@@ -195,7 +195,7 @@ async fn test_wrong_password_rejected() {
         assert!(result.is_err(), "server must reject a wrong-password login");
     });
 
-    let quic_client = QuicClient::bind(None).unwrap();
+    let quic_client = QuicClient::bind_dev(None).unwrap();
     let conn = timeout(Duration::from_secs(10), quic_client.connect(bound_addr))
         .await
         .expect("connect within timeout")
@@ -234,7 +234,7 @@ async fn test_large_message_fragmentation_roundtrip() {
     let server_manager = Arc::new(SessionManager::new());
 
     let server_addr: SocketAddr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0));
-    let quic_server = QuicServer::bind(server_addr, None).unwrap();
+    let quic_server = QuicServer::bind_dev(server_addr, None).unwrap();
     let bound_addr = quic_server.endpoint.local_addr().unwrap();
 
     let accept_handle = tokio::spawn(async move {
@@ -266,7 +266,7 @@ async fn test_large_message_fragmentation_roundtrip() {
         conn.closed().await;
     });
 
-    let quic_client = QuicClient::bind(None).unwrap();
+    let quic_client = QuicClient::bind_dev(None).unwrap();
     let conn = timeout(Duration::from_secs(10), quic_client.connect(bound_addr))
         .await
         .expect("connect within timeout")

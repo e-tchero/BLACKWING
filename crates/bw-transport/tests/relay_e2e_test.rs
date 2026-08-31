@@ -93,7 +93,7 @@ async fn test_relay_e2e_quic_handshake_and_data_exchange() {
 
     // ── 5. Bind QUIC server (via relay) ────────────────────────────────────
     let server_direct_addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
-    let quic_server = QuicServer::bind(server_direct_addr, Some((relay_addr, token))).unwrap();
+    let quic_server = QuicServer::bind_dev(server_direct_addr, Some((relay_addr, token))).unwrap();
     let server_addr = quic_server.endpoint.local_addr().unwrap();
 
     // Register server binding in forwarding table
@@ -102,7 +102,7 @@ async fn test_relay_e2e_quic_handshake_and_data_exchange() {
         .unwrap();
 
     // ── 6. Bind QUIC client (via relay) ────────────────────────────────────
-    let quic_client = QuicClient::bind(Some((relay_addr, token))).unwrap();
+    let quic_client = QuicClient::bind_dev(Some((relay_addr, token))).unwrap();
     let client_addr = concrete_loopback_addr(quic_client.endpoint.local_addr().unwrap());
 
     // Register client binding in forwarding table
@@ -174,13 +174,13 @@ async fn test_relay_e2e_bidirectional_data_exchange() {
     let (relay_addr, _relay_task) = spawn_relay_forwarder(table.clone()).await;
 
     let quic_server =
-        QuicServer::bind("127.0.0.1:0".parse().unwrap(), Some((relay_addr, token))).unwrap();
+        QuicServer::bind_dev("127.0.0.1:0".parse().unwrap(), Some((relay_addr, token))).unwrap();
     let server_addr = quic_server.endpoint.local_addr().unwrap();
     table
         .update_binding(intent_id, server_id, server_addr)
         .unwrap();
 
-    let quic_client = QuicClient::bind(Some((relay_addr, token))).unwrap();
+    let quic_client = QuicClient::bind_dev(Some((relay_addr, token))).unwrap();
     let client_addr = concrete_loopback_addr(quic_client.endpoint.local_addr().unwrap());
     table
         .update_binding(intent_id, client_id, client_addr)

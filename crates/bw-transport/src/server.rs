@@ -21,23 +21,22 @@ pub enum QuicServerError {
 }
 
 /// A QUIC server endpoint.
-///
-/// Listens on the given address, optionally wrapping the socket with a
-/// `RelayUdpSocket` so inbound traffic arrives via a relay.
 pub struct QuicServer {
     /// The underlying Quinn endpoint.
     pub endpoint: Endpoint,
 }
 
 impl QuicServer {
-    /// Binds a QUIC endpoint to the given address, generating a self-signed certificate.
-    /// Optionally wraps the socket with a `RelayUdpSocket` if relay parameters are provided.
+    /// Binds a QUIC endpoint to the given address, generating a self-signed
+    /// certificate from the server's Ed25519 signing key.
     pub fn bind(
         addr: SocketAddr,
         relay: Option<(SocketAddr, [u8; 32])>,
+        tls_key_pair: &rcgen::KeyPair,
+        subject_alt_names: Vec<String>,
     ) -> Result<Self, QuicServerError> {
-        let subject_alt_names = vec!["localhost".into(), "127.0.0.1".into()];
-        let tls_config = cert::generate_server_config(subject_alt_names)?;
+        let tls_config =
+            cert::generate_server_config_from_keypair(tls_key_pair, subject_alt_names)?;
         let quic_server_config = quinn::crypto::rustls::QuicServerConfig::try_from(tls_config)
             .map_err(|_| QuicServerError::EndpointError)?;
         let transport_config = TransportConfig::default();
@@ -45,17 +44,14 @@ impl QuicServer {
         server_config.transport_config(Arc::new(transport_config));
 
         let endpoint = if let Some((relay_addr, token)) = relay {
-            // Relay path needs QUIC keepalives so the relay's idle timer never expires.
             let mut relay_transport_config = TransportConfig::default();
             relay_transport_config.keep_alive_interval(Some(std::time::Duration::from_secs(10)));
             server_config.transport_config(Arc::new(relay_transport_config));
             let std_socket = std::net::UdpSocket::bind(addr)?;
             std_socket.set_nonblocking(true)?;
             let tokio_socket = tokio::net::UdpSocket::from_std(std_socket)?;
-
             let relay_socket =
                 crate::relay_socket::RelayUdpSocket::new(Arc::new(tokio_socket), relay_addr, token);
-
             Endpoint::new_with_abstract_socket(
                 quinn::EndpointConfig::default(),
                 Some(server_config),
@@ -69,18 +65,52 @@ impl QuicServer {
         Ok(Self { endpoint })
     }
 
-    /// Binds a QUIC endpoint whose datagrams travel over an established ICE
-    /// connection (the P2P path negotiated by `bw-ice`).
-    ///
-    /// The ICE socket reports the connection's local address, so no explicit
-    /// bind address is needed; peers connect to that address.
-    pub fn bind_with_ice(ice: IceConnection) -> Result<Self, QuicServerError> {
+    /// Development-only QUIC endpoint with self-signed localhost cert.
+    pub fn bind_dev(
+        addr: SocketAddr,
+        relay: Option<(SocketAddr, [u8; 32])>,
+    ) -> Result<Self, QuicServerError> {
         let subject_alt_names = vec!["localhost".into(), "127.0.0.1".into()];
         let tls_config = cert::generate_server_config(subject_alt_names)?;
         let quic_server_config = quinn::crypto::rustls::QuicServerConfig::try_from(tls_config)
             .map_err(|_| QuicServerError::EndpointError)?;
-        let server_config = ServerConfig::with_crypto(Arc::new(quic_server_config));
+        let transport_config = TransportConfig::default();
+        let mut server_config = ServerConfig::with_crypto(Arc::new(quic_server_config));
+        server_config.transport_config(Arc::new(transport_config));
 
+        let endpoint = if let Some((relay_addr, token)) = relay {
+            let mut relay_transport_config = TransportConfig::default();
+            relay_transport_config.keep_alive_interval(Some(std::time::Duration::from_secs(10)));
+            server_config.transport_config(Arc::new(relay_transport_config));
+            let std_socket = std::net::UdpSocket::bind(addr)?;
+            std_socket.set_nonblocking(true)?;
+            let tokio_socket = tokio::net::UdpSocket::from_std(std_socket)?;
+            let relay_socket =
+                crate::relay_socket::RelayUdpSocket::new(Arc::new(tokio_socket), relay_addr, token);
+            Endpoint::new_with_abstract_socket(
+                quinn::EndpointConfig::default(),
+                Some(server_config),
+                relay_socket,
+                Arc::new(quinn::TokioRuntime),
+            )?
+        } else {
+            Endpoint::server(server_config, addr)?
+        };
+
+        Ok(Self { endpoint })
+    }
+
+    /// Binds a QUIC endpoint over an ICE connection with certificate pinning.
+    pub fn bind_with_ice(
+        ice: IceConnection,
+        tls_key_pair: &rcgen::KeyPair,
+        subject_alt_names: Vec<String>,
+    ) -> Result<Self, QuicServerError> {
+        let tls_config =
+            cert::generate_server_config_from_keypair(tls_key_pair, subject_alt_names)?;
+        let quic_server_config = quinn::crypto::rustls::QuicServerConfig::try_from(tls_config)
+            .map_err(|_| QuicServerError::EndpointError)?;
+        let server_config = ServerConfig::with_crypto(Arc::new(quic_server_config));
         let socket = IceUdpSocket::new(ice)?;
         let endpoint = Endpoint::new_with_abstract_socket(
             quinn::EndpointConfig::default(),
@@ -88,7 +118,23 @@ impl QuicServer {
             socket,
             Arc::new(quinn::TokioRuntime),
         )?;
+        Ok(Self { endpoint })
+    }
 
+    /// Development-only ICE endpoint.
+    pub fn bind_with_ice_dev(ice: IceConnection) -> Result<Self, QuicServerError> {
+        let subject_alt_names = vec!["localhost".into(), "127.0.0.1".into()];
+        let tls_config = cert::generate_server_config(subject_alt_names)?;
+        let quic_server_config = quinn::crypto::rustls::QuicServerConfig::try_from(tls_config)
+            .map_err(|_| QuicServerError::EndpointError)?;
+        let server_config = ServerConfig::with_crypto(Arc::new(quic_server_config));
+        let socket = IceUdpSocket::new(ice)?;
+        let endpoint = Endpoint::new_with_abstract_socket(
+            quinn::EndpointConfig::default(),
+            Some(server_config),
+            socket,
+            Arc::new(quinn::TokioRuntime),
+        )?;
         Ok(Self { endpoint })
     }
 

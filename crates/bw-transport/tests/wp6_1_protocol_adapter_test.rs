@@ -10,13 +10,13 @@ use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 #[tokio::test]
 async fn test_wp6_1_protocol_adapter_exchange() {
     let server_addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0));
-    let server = QuicServer::bind(server_addr, None).expect("Server should bind");
+    let server = QuicServer::bind_dev(server_addr, None).expect("Server should bind");
 
     // Get actual bound port
     let bound_addr = server.endpoint.local_addr().unwrap();
     let connect_addr = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), bound_addr.port());
 
-    let client = QuicClient::bind(None).expect("Client should bind");
+    let client = QuicClient::bind_dev(None).expect("Client should bind");
 
     // Spawn server accept task
     let server_task = tokio::spawn(async move {

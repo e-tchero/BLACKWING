@@ -57,6 +57,7 @@ struct Args {
     relay: Option<String>,
     target_id: Option<String>,
     signing_key: Option<std::path::PathBuf>,
+    dev_insecure: bool,
 }
 
 fn parse_args() -> Args {
@@ -66,6 +67,7 @@ fn parse_args() -> Args {
     let mut relay: Option<String> = None;
     let mut target_id: Option<String> = None;
     let mut signing_key: Option<std::path::PathBuf> = None;
+    let mut dev_insecure = false;
 
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -82,9 +84,10 @@ fn parse_args() -> Args {
                     it.next().expect("--signing-key requires a path"),
                 ))
             }
+            "--dev-insecure" => dev_insecure = true,
             "--help" | "-h" => {
                 eprintln!(
-                    "usage: bw-client --server ADDR --id ID --password PASS [--relay ADDR] [--target-id ID] [--signing-key PATH]"
+                    "usage: bw-client --server ADDR --id ID --password PASS [--relay ADDR] [--target-id ID] [--signing-key PATH] [--dev-insecure]"
                 );
                 std::process::exit(0);
             }
@@ -101,6 +104,7 @@ fn parse_args() -> Args {
         relay,
         target_id,
         signing_key,
+        dev_insecure,
     }
 }
 
@@ -866,9 +870,24 @@ async fn run_session(
         let (token, _server_candidates) = rt.block_on(relay_client.get_candidates(intent_id))?;
         eprintln!("relay authorization obtained via CandidateExchange");
 
-        QuicClient::bind(Some((relay_sock, token)))?
+        // H5 FIX: Use pinned client config with the target server's DeviceId.
+        QuicClient::bind(Some((relay_sock, token)), target_id)?
     } else {
-        QuicClient::bind(None)?
+        // H5+H6: Production mode requires --target-id for certificate pinning.
+        // Dev mode (--dev-insecure) skips certificate verification entirely.
+        let target_id_str = args
+            .target_id
+            .as_ref()
+            .ok_or("--target-id is required for production mode (or use --dev-insecure)")?;
+        let target_id: bw_crypto::DeviceId = target_id_str
+            .parse()
+            .map_err(|e| format!("invalid target-id: {e}"))?;
+        if args.dev_insecure {
+            eprintln!("WARNING: running in dev-insecure mode — certificate verification DISABLED");
+            QuicClient::bind_dev(None)?
+        } else {
+            QuicClient::bind(None, target_id)?
+        }
     };
 
     eprintln!("connecting to {}", args.server);

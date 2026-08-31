@@ -15,12 +15,12 @@ use std::sync::Arc;
 #[tokio::test]
 async fn test_secure_connection_lifecycle() {
     let server_addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0));
-    let server = QuicServer::bind(server_addr, None).expect("Server should bind");
+    let server = QuicServer::bind_dev(server_addr, None).expect("Server should bind");
 
     let bound_addr = server.endpoint.local_addr().unwrap();
     let connect_addr = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), bound_addr.port());
 
-    let client = QuicClient::bind(None).expect("Client should bind");
+    let client = QuicClient::bind_dev(None).expect("Client should bind");
 
     // Each node owns its own SessionManager (matches real deployment topology)
     let server_session_manager = Arc::new(SessionManager::new());
