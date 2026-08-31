@@ -138,7 +138,7 @@ impl SecureConnection {
             &master_secret,
             &client_nonce,
             &server_nonce,
-            KeyRotationPolicy::Manual,
+            KeyRotationPolicy::Counter(10_000),
         )?;
 
         self.lifecycle
@@ -203,7 +203,7 @@ impl SecureConnection {
             recv_key: client_keys.send_key.clone(),
             epoch: client_keys.epoch,
         };
-        let context = EncryptionContext::new(server_keys, KeyRotationPolicy::Manual);
+        let context = EncryptionContext::new(server_keys, KeyRotationPolicy::Counter(10_000));
         self.session_manager
             .create_session_with_context(self.session_id, context)
             .map_err(SecureConnError::Protocol)?;

@@ -188,7 +188,7 @@ impl FrameEncryptor {
     /// Rotates the send key using HKDF.
     pub fn rotate_keys(&mut self) -> Result<(), ProtocolError> {
         self.epoch += 1;
-        let info = format!("send-epoch-{}", self.epoch);
+        let info = format!("epoch-{}", self.epoch);
         let new_key = hkdf_derive(None, &self.send_key.0, Some(info.as_bytes()))
             .map_err(|_| ProtocolError::EncryptionError)?;
         self.send_key = new_key;
@@ -222,34 +222,79 @@ impl FrameDecryptor {
     }
 
     /// Decrypts an encrypted frame.
+    ///
+    /// If the frame's epoch is exactly one ahead of the current epoch,
+    /// the decryptor automatically rotates its key before decryption.
+    /// This keeps the receiver synchronized with a sender that rotates
+    /// at the configured Counter threshold.
     pub fn decrypt_frame(
         &mut self,
         encrypted: &EncryptedFrame,
     ) -> Result<OwnedProtocolFrame, ProtocolError> {
-        if encrypted.epoch != self.epoch {
-            return Err(ProtocolError::EncryptionError);
+        if encrypted.epoch == self.epoch {
+            // ── Same epoch: normal path ──────────────────────────────
+            self.replay_protection.protect_replay(&encrypted.nonce)?;
+
+            let plaintext = decrypt_aead(
+                &self.recv_key,
+                &encrypted.nonce.0,
+                &encrypted.ciphertext,
+                &encrypted.tag.0,
+                &[],
+            )
+            .map_err(|_| ProtocolError::EncryptionError)?;
+
+            let borrowed_frame = decode_frame(&plaintext)?;
+            Ok(OwnedProtocolFrame {
+                header: borrowed_frame.header,
+                payload: borrowed_frame.payload.to_vec(),
+            })
+        } else if encrypted.epoch == self.epoch + 1 {
+            // ── Next epoch: derive candidate key, authenticate FIRST ──
+            //
+            // Compute the key we WOULD have after rotation, but do NOT
+            // mutate self yet.  Only commit the epoch/key/replay-window
+            // transition after AEAD authentication succeeds, so a forged
+            // frame can never advance receiver state.
+            let candidate_epoch = self.epoch + 1;
+            let info = format!("epoch-{}", candidate_epoch);
+            let candidate_key = hkdf_derive(None, &self.recv_key.0, Some(info.as_bytes()))
+                .map_err(|_| ProtocolError::EncryptionError)?;
+
+            // Attempt AEAD with the candidate key (fresh replay window).
+            let mut candidate_replay = ReplayProtection::new();
+            candidate_replay.protect_replay(&encrypted.nonce)?;
+
+            let plaintext = decrypt_aead(
+                &candidate_key,
+                &encrypted.nonce.0,
+                &encrypted.ciphertext,
+                &encrypted.tag.0,
+                &[],
+            )
+            .map_err(|_| ProtocolError::EncryptionError)?;
+
+            // ── Authentication succeeded: commit state transition ─────
+            self.epoch = candidate_epoch;
+            self.recv_key = candidate_key;
+            self.replay_protection = candidate_replay;
+
+            let borrowed_frame = decode_frame(&plaintext)?;
+            Ok(OwnedProtocolFrame {
+                header: borrowed_frame.header,
+                payload: borrowed_frame.payload.to_vec(),
+            })
+        } else {
+            // ── Wrong epoch: reject immediately, no state change ──────
+            Err(ProtocolError::EncryptionError)
         }
-
-        self.replay_protection.protect_replay(&encrypted.nonce)?;
-
-        let plaintext = decrypt_aead(
-            &self.recv_key,
-            &encrypted.nonce.0,
-            &encrypted.ciphertext,
-            &encrypted.tag.0,
-            &[],
-        )
-        .map_err(|_| ProtocolError::EncryptionError)?;
-
-        let borrowed_frame = decode_frame(&plaintext)?;
-        Ok(OwnedProtocolFrame {
-            header: borrowed_frame.header,
-            payload: borrowed_frame.payload.to_vec(),
-        })
     }
 
     /// Verifies the authentication tag of an encrypted frame without full decryption.
     pub fn verify_tag(&self, encrypted: &EncryptedFrame) -> Result<(), ProtocolError> {
+        // NOTE: verify_tag is read-only (no &mut self), so it cannot auto-rotate.
+        // It checks only the current epoch. Callers that need to verify across
+        // epoch boundaries should rotate first, then verify.
         if encrypted.epoch != self.epoch {
             return Err(ProtocolError::EncryptionError);
         }
@@ -269,7 +314,7 @@ impl FrameDecryptor {
     /// Rotates the receive key using HKDF.
     pub fn rotate_keys(&mut self) -> Result<(), ProtocolError> {
         self.epoch += 1;
-        let info = format!("recv-epoch-{}", self.epoch);
+        let info = format!("epoch-{}", self.epoch);
         let new_key = hkdf_derive(None, &self.recv_key.0, Some(info.as_bytes()))
             .map_err(|_| ProtocolError::EncryptionError)?;
         self.recv_key = new_key;
