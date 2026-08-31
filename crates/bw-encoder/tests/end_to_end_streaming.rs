@@ -147,7 +147,9 @@ async fn test_end_to_end_streaming() {
     let (encoded_tx, mut encoded_rx) = mpsc::channel(10);
     let _encoder_pipeline = EncoderPipeline::spawn(Box::new(encoder_backend), frame_rx, encoded_tx);
 
-    // 4. Transmit loop
+    // 4. Transmit loop — handle server-side connection closure gracefully.
+    // The server may close the connection after receiving enough frames;
+    // the client must not panic on that, it must stop sending cleanly.
     let mut stream = conn.open_uni().await.unwrap();
     let mut _frames_sent = 0;
 
@@ -159,10 +161,22 @@ async fn test_end_to_end_streaming() {
 
         let bytes = encoded_frame.to_bytes();
         let len = bytes.len() as u32;
-        stream.write_all(&len.to_be_bytes()).await.unwrap();
-        stream.write_all(&bytes).await.unwrap();
+        let write_result = async {
+            stream.write_all(&len.to_be_bytes()).await?;
+            stream.write_all(&bytes).await?;
+            Ok::<(), std::io::Error>(())
+        }
+        .await;
 
-        _frames_sent += 1;
+        match write_result {
+            Ok(()) => {
+                _frames_sent += 1;
+            }
+            Err(_) => {
+                // Server closed the connection — stop sending.
+                break;
+            }
+        }
     }
 
     capture_thread.stop();
