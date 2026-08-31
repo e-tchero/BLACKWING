@@ -12,6 +12,14 @@ use thiserror::Error;
 /// Maximum acceptable clock skew for signed messages (5 minutes in milliseconds).
 const TIMESTAMP_WINDOW_MS: u64 = 300_000;
 
+/// Maximum concurrent device registrations in the relay registry.
+/// Prevents unbounded memory growth from registration floods.
+const MAX_REGISTRATIONS: usize = 1024;
+
+/// Stale registration threshold: registrations older than this are
+/// evicted when the registry is at capacity (5 minutes in ms).
+const STALE_REGISTRATION_MS: u64 = 300_000;
+
 /// Error type for relay server operations.
 #[derive(Error, Debug)]
 pub enum RelayError {
@@ -263,18 +271,30 @@ impl RelayServer {
             .next_session_id
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-        self.registry
+        let mut registry = self
+            .registry
             .write()
-            .map_err(|_| RelayError::Internal("Registry write lock poisoned".into()))?
-            .insert(
-                device_id,
-                ClientContext {
-                    session_id,
-                    last_seen: now,
-                    verify_key_bytes,
-                    server_reflexive_addr: peer_addr,
-                },
-            );
+            .map_err(|_| RelayError::Internal("Registry write lock poisoned".into()))?;
+
+        // M2 FIX: if at capacity, evict stale registrations.
+        if registry.len() >= MAX_REGISTRATIONS {
+            let stale_before = now.saturating_sub(STALE_REGISTRATION_MS);
+            registry.retain(|_, ctx| ctx.last_seen > stale_before);
+            // If still at capacity after evicting stale entries, reject.
+            if registry.len() >= MAX_REGISTRATIONS {
+                return Err(RelayError::Internal("Relay registry is at capacity".into()));
+            }
+        }
+
+        registry.insert(
+            device_id,
+            ClientContext {
+                session_id,
+                last_seen: now,
+                verify_key_bytes,
+                server_reflexive_addr: peer_addr,
+            },
+        );
 
         Ok(RelayMessage::RegisterAck {
             relay_session_id: session_id,

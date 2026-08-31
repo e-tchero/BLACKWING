@@ -32,6 +32,10 @@ const BLOCKLIST_THRESHOLD: u64 = 20;
 /// Rolling window (60 seconds) over which failed lookups are counted for the blocklist.
 const BLOCKLIST_WINDOW_MS: u64 = 60_000;
 
+/// Maximum number of tracked source IPs in the blocklist.
+/// Prevents unbounded memory growth from distributed brute-force attacks.
+const MAX_BLOCKLIST_ENTRIES: usize = 4096;
+
 /// Lifecycle state of a relay forwarding context.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ForwardingState {
@@ -257,6 +261,14 @@ impl ForwardingTable {
             .failed_lookups
             .write()
             .unwrap_or_else(|e| e.into_inner());
+
+        // M6 FIX: evict stale entries if blocklist is at capacity.
+        if failed.len() >= MAX_BLOCKLIST_ENTRIES {
+            failed.retain(|_, (_, window_start)| {
+                now.saturating_sub(*window_start) <= BLOCKLIST_WINDOW_MS
+            });
+        }
+
         let entry = failed.entry(ip).or_insert((0, now));
         if now.saturating_sub(entry.1) > BLOCKLIST_WINDOW_MS {
             *entry = (1, now);

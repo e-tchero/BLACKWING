@@ -7,6 +7,10 @@ use std::sync::{Arc, RwLock};
 /// Maximum time (ms) a connect intent can remain in the Pending state before expiring.
 pub const INTENT_TIMEOUT_MS: u64 = 30_000;
 
+/// Maximum concurrent connect intents in the rendezvous registry.
+/// Prevents unbounded memory growth from intent floods.
+const MAX_INTENTS: usize = 2048;
+
 /// Lifecycle state of a connect intent.
 #[derive(Debug, Clone)]
 pub enum IntentState {
@@ -79,6 +83,17 @@ impl RendezvousRegistry {
             .intents
             .write()
             .map_err(|_| "Rendezvous registry write lock poisoned")?;
+
+        // M3 FIX: sweep expired intents before checking capacity.
+        let stale_before = now.saturating_sub(INTENT_TIMEOUT_MS);
+        intents.retain(|_, intent| {
+            matches!(&intent.state, IntentState::Pending { created_at } if *created_at > stale_before)
+                || !matches!(&intent.state, IntentState::Pending { .. })
+        });
+
+        if intents.len() >= MAX_INTENTS {
+            return Err("Rendezvous registry is at capacity");
+        }
 
         if intents
             .get(&intent_id)

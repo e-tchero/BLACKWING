@@ -190,6 +190,19 @@ impl ProtocolMessage {
     /// allocation through CBOR deserialization.
     pub const MAX_DESER_SIZE: usize = 4 * 1024 * 1024;
 
+    /// Maximum length of clipboard text data in bytes (1 MiB).
+    /// Prevents unbounded allocation from malicious clipboard payloads.
+    pub const MAX_CLIPBOARD_TEXT_LEN: usize = 1024 * 1024;
+
+    /// Maximum dimension (width or height) for clipboard images in pixels.
+    /// Combined with MAX_CLIPBOARD_TEXT_LEN this bounds the maximum
+    /// allocation from a single clipboard event to ~16 GiB (the RGBA
+    /// payload), but the 4 MiB ProtocolMessage::MAX_DESER_SIZE limits
+    /// the actual serialized size to 4 MiB. This dimension check
+    /// prevents integer overflow in width * height * 4 before the
+    /// deserialized payload is even allocated.
+    pub const MAX_CLIPBOARD_IMAGE_DIM: usize = 4096;
+
     /// Deserializes a byte slice into a structured `ProtocolMessage`.
     ///
     /// Rejects payloads exceeding `MAX_DESER_SIZE` before CBOR allocation.
@@ -310,7 +323,29 @@ impl ProtocolMessage {
         if self.message_type != MessageType::ClipboardData {
             return None;
         }
-        ciborium::de::from_reader(&self.payload[..]).ok()
+        let event: ClipboardEvent = ciborium::de::from_reader(&self.payload[..]).ok()?;
+
+        // M1 FIX: validate clipboard payload size before accepting.
+        match &event.format {
+            ClipboardFormat::Text => {
+                if event.data.len() > Self::MAX_CLIPBOARD_TEXT_LEN {
+                    return None;
+                }
+            }
+            ClipboardFormat::ImageRgba8 { width, height } => {
+                // Reject if dimensions exceed maximum or if width*height*4 overflows.
+                if *width > Self::MAX_CLIPBOARD_IMAGE_DIM || *height > Self::MAX_CLIPBOARD_IMAGE_DIM
+                {
+                    return None;
+                }
+                let expected = width.checked_mul(*height).and_then(|a| a.checked_mul(4));
+                match expected {
+                    Some(exp) if exp == event.data.len() => {}
+                    _ => return None,
+                }
+            }
+        }
+        Some(event)
     }
 
     /// Builds a [`MessageType::AudioData`] message carrying an [`AudioPayload`].
