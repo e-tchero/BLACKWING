@@ -41,10 +41,69 @@ use bw_server::{audio_packet_message, register_clipboard_handler, register_input
 use bw_session::wire;
 use bw_transport::QuicServer;
 use bw_transport::adapter::QuicProtocolAdapter;
-use tokio::sync::mpsc;
+use std::collections::HashMap;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
+use tokio::sync::{Semaphore, mpsc};
 
 const DEFAULT_LISTEN: &str = "0.0.0.0:9000";
 const FRAME_CAPACITY: usize = 4;
+
+/// Maximum number of concurrent OPAQUE handshakes allowed.
+/// Prevents CPU/memory exhaustion from authentication floods.
+const MAX_CONCURRENT_HANDSHAKES: usize = 4;
+
+/// Maximum number of authentication attempts allowed per source IP
+/// within the tracking window.
+const MAX_AUTH_ATTEMPTS_PER_IP: usize = 10;
+
+/// Duration after which per-IP rate-limit counters reset.
+const IP_RATE_WINDOW: Duration = Duration::from_secs(60);
+
+/// Hard timeout for the entire OPAQUE handshake sequence.
+/// If the handshake does not complete within this duration, it is aborted
+/// and the connection is closed.
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Tracks per-IP authentication attempts within a sliding window.
+///
+/// Bounded to avoid unbounded memory growth from spoofed source IPs.
+struct PerIpRateLimiter {
+    attempts: Mutex<HashMap<std::net::IpAddr, (usize, Instant)>>,
+}
+
+impl PerIpRateLimiter {
+    fn new() -> Self {
+        Self {
+            attempts: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Returns true if the IP is allowed to attempt authentication.
+    /// Bounded to MAX_AUTH_ATTEMPTS_PER_IP per IP_RATE_WINDOW.
+    /// Evicts stale entries when the map grows beyond a reasonable bound.
+    fn check_and_record(&self, ip: std::net::IpAddr) -> bool {
+        let mut map = self.attempts.lock().unwrap_or_else(|e| e.into_inner());
+        let now = Instant::now();
+
+        // Evict stale entries if map is large (prevent memory exhaustion)
+        if map.len() > 1024 {
+            map.retain(|_, (_, ts)| now.duration_since(*ts) < IP_RATE_WINDOW);
+        }
+
+        let entry = map.entry(ip).or_insert((0, now));
+        if now.duration_since(entry.1) >= IP_RATE_WINDOW {
+            // Window expired — reset
+            *entry = (1, now);
+            true
+        } else if entry.0 >= MAX_AUTH_ATTEMPTS_PER_IP {
+            false
+        } else {
+            entry.0 += 1;
+            true
+        }
+    }
+}
 
 /// Simple positional/flag argument parser.
 struct Args {
@@ -222,26 +281,62 @@ async fn run_server(
         QuicServer::bind(listen_addr, None)?
     };
 
-    eprintln!("server ready — waiting for client sessions");
+    // H3 FIX: admission control — semaphore + per-IP rate limiter.
+    let handshake_semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_HANDSHAKES));
+    let rate_limiter = Arc::new(PerIpRateLimiter::new());
+
+    eprintln!("server ready — max concurrent handshakes: {MAX_CONCURRENT_HANDSHAKES}");
     loop {
         let Some(conn) = quic_server.accept().await else {
             continue;
         };
-        eprintln!("connection accepted");
+
+        // H3: extract remote IP for per-IP admission control.
+        let remote_ip = conn.remote_address().ip();
+
+        // H3: per-IP rate limit check.
+        if !rate_limiter.check_and_record(remote_ip) {
+            eprintln!("rate limit exceeded for {remote_ip} — rejecting");
+            conn.close(0u32.into(), b"rate limit exceeded");
+            continue;
+        }
+
+        // H3: acquire handshake permit BEFORE spawning expensive work.
+        // Use try_acquire_owned so we never queue unlimited tasks.
+        let permit = match handshake_semaphore.clone().try_acquire_owned() {
+            Ok(p) => p,
+            Err(_) => {
+                eprintln!("handshake limit reached — rejecting {remote_ip}");
+                conn.close(0u32.into(), b"too many concurrent handshakes");
+                continue;
+            }
+        };
+
+        eprintln!("connection accepted from {remote_ip}");
         let dispatcher = Arc::clone(&dispatcher);
         let session_manager = Arc::clone(&session_manager);
         let store = Arc::clone(&store);
         tokio::spawn(async move {
-            if let Err(e) = handle_session(
-                conn,
-                &store,
-                &dispatcher,
-                &session_manager,
-                server_device_id,
+            // H3: wrap the entire handshake + session in a timeout.
+            let result = tokio::time::timeout(
+                HANDSHAKE_TIMEOUT,
+                handle_session(
+                    conn,
+                    &store,
+                    &dispatcher,
+                    &session_manager,
+                    server_device_id,
+                ),
             )
-            .await
-            {
-                eprintln!("session error: {e}");
+            .await;
+
+            // H3: release the permit when done (drop on scope exit).
+            drop(permit);
+
+            match result {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => eprintln!("session error: {e}"),
+                Err(_) => eprintln!("handshake/session timed out for {remote_ip}"),
             }
         });
     }
