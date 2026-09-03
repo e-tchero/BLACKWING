@@ -270,35 +270,35 @@ async fn run_server(
     // Optional relay data-plane routing via CandidateExchange.
     // C1 FIX: obtain the relay token through the authenticated control-plane
     // flow instead of generating an independent random token.
+    // F3 FIX: continuous polling with cancellation-safe shutdown.
     let quic_server = if let Some(relay_addr) = relay {
         let relay_sock: std::net::SocketAddr = relay_addr.parse()?;
 
         // Register with the relay control plane.
-        let rt = tokio::runtime::Runtime::new()?;
-        let relay_client = rt.block_on(async {
+        let relay_client =
             bw_relay::relay_client::RelayControlClient::connect(relay_sock, server_signing_key)
-                .await
-        })?;
-        rt.block_on(relay_client.register())?;
+                .await?;
+        relay_client.register().await?;
         eprintln!("registered with relay");
 
-        // Poll for pending ConnectIntents targeting this server.
+        // F3: Continuously poll for pending ConnectIntents until one arrives.
+        // Uses async sleep (no busy loop) and is cancellation-safe via tokio select.
         eprintln!("polling relay for pending connections...");
-        let mut relay_token = None;
-        for _ in 0..15 {
-            let intents = rt.block_on(relay_client.poll_pending_intents())?;
+        let poll_interval = std::time::Duration::from_secs(2);
+        let relay_token = loop {
+            let intents = relay_client.poll_pending_intents().await?;
             if let Some((intent_id, initiator)) = intents.into_iter().next() {
                 eprintln!("received connect intent from initiator");
                 // Accept the intent — relay generates the token.
-                let (token, _initiator_candidates) =
-                    rt.block_on(relay_client.accept_connect(intent_id, initiator, vec![]))?;
-                relay_token = Some(token);
-                break;
+                let (token, _initiator_candidates) = relay_client
+                    .accept_connect(intent_id, initiator, vec![])
+                    .await?;
+                break Some(token);
             }
-            std::thread::sleep(std::time::Duration::from_secs(2));
-        }
+            tokio::time::sleep(poll_interval).await;
+        };
 
-        let token = relay_token.ok_or("no pending relay connections within timeout")?;
+        let token = relay_token.ok_or("relay polling cancelled")?;
         eprintln!("relay authorization obtained via CandidateExchange");
         QuicServer::bind(
             listen_addr,

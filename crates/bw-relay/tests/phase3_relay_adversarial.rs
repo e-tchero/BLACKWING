@@ -214,7 +214,7 @@ fn attack_oversized_packet() {
         120_000,
     );
 
-    let mut token = [0u8; 32];
+    let token = [0u8; 32];
     let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)), 9000);
     // Packet larger than MAX_FORWARDING_PAYLOAD.
     let result = table.get_destination(&token, addr, 2000);
@@ -449,7 +449,7 @@ fn attack_blocklist_legitimate_after_expiry() {
     let addr = SocketAddr::new(ip, 9000);
 
     // Trigger blocklist.
-    let mut token = [0u8; 32];
+    let token = [0u8; 32];
     for _ in 0..25 {
         table.get_destination(&token, addr, 100);
     }

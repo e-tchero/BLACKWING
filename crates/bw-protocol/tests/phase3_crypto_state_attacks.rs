@@ -44,6 +44,7 @@ fn make_context(policy: KeyRotationPolicy) -> EncryptionContext {
     EncryptionContext::new(keys, policy)
 }
 
+#[allow(dead_code)]
 fn make_pair(policy: KeyRotationPolicy) -> (FrameEncryptor, FrameDecryptor) {
     let send_key = SymmetricKey([0xAB; 32]);
     let recv_key = SymmetricKey([0xAB; 32]);
@@ -234,7 +235,7 @@ fn attack_nonce_uniqueness_across_epochs() {
     let ct2 = ctx.encrypt_frame(&f2).unwrap();
     let ct3 = ctx.encrypt_frame(&f3).unwrap();
 
-    let nonces = vec![ct1.nonce.0, ct2.nonce.0, ct3.nonce.0];
+    let nonces = [ct1.nonce.0, ct2.nonce.0, ct3.nonce.0];
     for i in 0..nonces.len() {
         for j in (i + 1)..nonces.len() {
             assert_ne!(nonces[i], nonces[j], "Nonce reuse detected");

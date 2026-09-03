@@ -4,10 +4,10 @@
 //! Actively attempts to break BLACKWING protocol deserialization,
 //! fragment reassembly, and message handling.
 
-use bw_protocol::message::MessageType;
 use bw_protocol::message::{ClipboardEvent, ClipboardFormat, KeyboardEvent, ProtocolMessage};
 use bw_protocol::routing::{MessageEnvelope, NodeId, Route, SessionId};
 
+#[allow(dead_code)]
 fn make_envelope(msg: ProtocolMessage) -> MessageEnvelope {
     MessageEnvelope {
         source: NodeId(bw_crypto::DeviceId::from_digest([1u8; 32])),
@@ -104,9 +104,7 @@ fn attack_tampered_message_type() {
 #[test]
 fn attack_deeply_nested_cbor() {
     let mut data = Vec::new();
-    for _ in 0..100 {
-        data.push(0x81); // array of 1
-    }
+    data.extend(std::iter::repeat_n(0x81u8, 100));
     data.push(0x00); // terminal value
     let result = ProtocolMessage::deserialize(&data);
     let _ = result;

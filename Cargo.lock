@@ -471,6 +471,7 @@ dependencies = [
  "bw-session",
  "bw-transport",
  "quinn",
+ "sha2",
  "tokio",
 ]
 
