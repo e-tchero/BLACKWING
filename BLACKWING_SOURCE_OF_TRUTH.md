@@ -11,7 +11,7 @@
 | Field | Value |
 |---|---|
 | **Last verified** | 2026-09-03 |
-| **Repository commit** | `722ad9f` (HEAD of `main`) |
+| **Repository commit** | `1fd53e9` (HEAD of `main`) |
 | **Branch** | `main` |
 | **Remote** | `origin` → `https://github.com/e-tchero/BLACKWING.git` |
 | **Verification method** | Direct source inspection, `cargo test --workspace`, `cargo clippy`, `cargo bench --no-run`, `git log`, `git diff` |
@@ -160,12 +160,13 @@ dbg_macro = "deny"
 |---|---|
 | Total workspace crates | 17 |
 | Total source lines | 15,320 |
-| Total test count | **364** (0 failures in workspace test run) |
+| Total test count | **364** (0 failures, 0 warnings in workspace test run) |
 | Benchmark binaries | 21 |
 | `unsafe` blocks | Only in `bw-capture` (COM/DXGI) and `bw-input` (Win32 FFI) — both with `#![allow(unsafe_code)]` overrides and safety comments |
 | `unimplemented!()` | 3 — all in `bw-crypto/src/backend/tpm.rs` (TPM stub) |
 | `todo!()` | 0 in library code |
 | `FIXME` / `HACK` / `XXX` | 0 |
+| Test-only warnings | 0 (all fixed in `1fd53e9`) |
 
 ---
 
@@ -188,13 +189,13 @@ dbg_macro = "deny"
 | OPAQUE Auth | Password-authenticated key exchange | `da6211a` | `wp-opaque-auth` | RFC 9381 implementation |
 | Security Hardening Phase 1 | TLS identity, SNI enforcement | `0140423` | — | `01fdb78` through `66ce31f` |
 | Security Hardening Phase 2 | Rate limiting, key rotation | `66ce31f` through `2390424` | — | `2390424` through `4bfe337` |
-| F3 Relay Polling Fix | Async relay polling (uncommitted) | — | — | **In working tree, not committed** |
+| F3 Relay Polling Fix | Async relay polling + deterministic test | `1fd53e9` | — | All tests pass, 0 warnings |
 
 ### 6.2 Current / In-Progress
 
 | Work | Status | Evidence |
 |---|---|---|
-| F3 relay polling async fix | **Implemented, tested, NOT committed** | `crates/bw-server/src/main.rs` diff, `f3_relay_polling_test.rs` |
+| ~~F3 relay polling async fix~~ | ✅ **COMPLETE** — committed `1fd53e9` | Async polling, deterministic tests, 0 warnings |
 | Remote cursor overlay | **Committed** | `52840bb` — `composite_cursor()` in bw-server, DXGI cursor extraction |
 | DXGI frame timer (idle refresh) | **Committed** | `52840bb` — `FrameTimerConfig`, `is_refresh` flag, periodic IDR refresh |
 | Mouse cursor fix (absolute positioning) | **Committed** | `8b154cd` — `MOUSEEVENTF_ABSOLUTE`, normalized coordinates |
@@ -258,23 +259,26 @@ The previous implementation in `bw-server/src/main.rs` had two issues:
 | `test_multiple_polling_cycles` | ✅ PASS | Verifies multiple poll cycles work |
 | `test_expired_intent_rejected_on_accept` | ✅ PASS | Expired intents are not accepted |
 | `test_intent_arriving_after_old_timeout` | ✅ PASS | Intent arriving after timeout still works |
-| `test_graceful_cancellation` | ⚠️ **FLAKY** | Timing-sensitive: asserts `count >= 3` after 55ms sleep with 10ms polls. Under scheduling pressure, only 2 polls complete before shutdown. |
+| `test_graceful_cancellation` | ✅ **PASS** (deterministic) | Synchronizes via `AtomicU32` on actual poll count — no timing dependency. Verified 10/10 passes including 5 under full workspace load. |
 
 ### 7.5 F3 Completeness Assessment
 
 | Question | Answer |
 |---|---|
-| Is F3 implemented? | **YES** — async polling fix is complete and compiles |
-| Are tests passing? | **3/4 pass, 1 flaky** (`test_graceful_cancellation` timing issue) |
-| Is it committed? | **NO** — changes are in working tree only |
-| Is it pushed? | **NO** — 9 commits already ahead of upstream |
-| Is it production-ready? | **MOSTLY** — the flaky test is a timing assertion, not an implementation bug |
+| Is F3 implemented? | **YES** — async polling fix complete and committed |
+| Are tests passing? | **4/4 pass, 0 flaky** |
+| Is it committed? | **YES** — `1fd53e9` |
+| Is it pushed? | **YES** — `origin/main` |
+| Is it production-ready? | **YES** — all quality gates pass, 0 warnings |
 
-### 7.6 Remaining F3 Work
+### 7.6 F3 Completion Record
 
-1. **Fix `test_graceful_cancellation` flaky timing** — increase sleep or use a counter that's less sensitive to scheduling
-2. **Commit the changes** — 3 modified files + 1 new test file
-3. **Clean up junk files** — delete `package.json` (empty) and `t --workspace` (accidental)
+- **Commit:** `1fd53e9` — `fix(blackwing): finalize F3 relay polling`
+- **Date:** 2026-09-03
+- **Test fix:** Replaced wall-clock timing with `AtomicU32` synchronization
+- **Junk cleanup:** Deleted `package.json` (empty `{}`) and `t --workspace` (accidental)
+- **Warning cleanup:** Fixed 5 cosmetic clippy warnings across 3 test files
+- **Status:** ✅ F3 CLOSED
 
 ---
 
@@ -444,11 +448,11 @@ Sender task → session.send_message() → QUIC stream → client
 
 | Warning | File | Severity |
 |---|---|---|
-| Unused variable `addr` | `bw-server/tests/f3_relay_polling_test.rs:25` | Low |
-| Unused function `make_pair` | `bw-protocol/tests/phase3_crypto_state_attacks.rs:47` | Low |
-| Unused import `MessageType` | `bw-protocol/tests/phase3_protocol_fuzz.rs:7` | Low |
-| Unused function `make_envelope` | `bw-protocol/tests/phase3_protocol_fuzz.rs:11` | Low |
-| Unused `mut` (2x) | `bw-relay/tests/phase3_relay_adversarial.rs:217,452` | Low |
+| ~~Unused variable `addr`~~ | ~~`bw-server/tests/f3_relay_polling_test.rs:25`~~ | ✅ Fixed |
+| ~~Unused function `make_pair`~~ | ~~`bw-protocol/tests/phase3_crypto_state_attacks.rs:47`~~ | ✅ Fixed |
+| ~~Unused import `MessageType`~~ | ~~`bw-protocol/tests/phase3_protocol_fuzz.rs:7`~~ | ✅ Fixed |
+| ~~Unused function `make_envelope`~~ | ~~`bw-protocol/tests/phase3_protocol_fuzz.rs:11`~~ | ✅ Fixed |
+| ~~Unused `mut` (2x)~~ | ~~`bw-relay/tests/phase3_relay_adversarial.rs:217,452`~~ | ✅ Fixed |
 
 ---
 
@@ -458,7 +462,7 @@ Sender task → session.send_message() → QUIC stream → client
 
 | # | Issue | Severity | Evidence | Status |
 |---|---|---|---|---|
-| 1 | F3 `test_graceful_cancellation` flaky | Low | Timing assertion `count >= 3` fails under scheduling pressure (gets 2) | Not fixed |
+| 1 | ~~F3 `test_graceful_cancellation` flaky~~ | ~~Low~~ | ~~Timing assertion~~ | ✅ **FIXED** — deterministic via AtomicU32 sync |
 | 2 | DXGI `refresh_hz` hardcoded to 60 | Low | `dxgi.rs:148` — `// TODO: query properly` | Not fixed |
 | 3 | Cursor shape always `Arrow` | Low | `dxgi.rs:386` — `// TODO: map PointerType` | Not fixed |
 | 4 | Cursor bitmap always `None` | Low | `dxgi.rs:387` — `// TODO: GetFramePointerShape` | Not fixed |
@@ -468,12 +472,12 @@ Sender task → session.send_message() → QUIC stream → client
 
 ### 13.2 Uncommitted Changes
 
-| Change | Risk | Action Needed |
-|---|---|---|
-| F3 async relay polling fix | Low | Commit — improves correctness |
-| F3 regression tests | Low | Commit — 3/4 pass, 1 flaky |
-| `sha2` dev-dependency | None | Commit with tests |
-| Junk files (`package.json`, `t --workspace`) | None | Delete |
+| Change | Status |
+|---|---|
+| ~~F3 async relay polling fix~~ | ✅ Committed `1fd53e9` |
+| ~~F3 regression tests~~ | ✅ Committed — 4/4 pass, 0 flaky |
+| ~~`sha2` dev-dependency~~ | ✅ Committed |
+| ~~Junk files (`package.json`, `t --workspace`)~~ | ✅ Deleted |
 
 ---
 
@@ -543,18 +547,15 @@ Sender task → session.send_message() → QUIC stream → client
 | Display fixes | Mouse cursor, screen jitter, bilinear scaling | Correct display rendering |
 | Cursor overlay | XOR crosshair cursor on server frames | Cursor visibility |
 | Frame timer | Idle refresh with periodic IDR keyframes | Static screen support |
-| F3 relay fix | Async polling (uncommitted) | Correct relay lifecycle |
+| F3 relay fix | Async polling + deterministic tests (`1fd53e9`) | Correct relay lifecycle |
 
 ---
 
 ## 18. Current Work
 
-**F3 relay polling async fix** — implemented, tested, awaiting commit.
+**F3 is COMPLETE.** Committed `1fd53e9`, pushed, source of truth updated.
 
-Changes in working tree:
-- `crates/bw-server/src/main.rs` — replace blocking relay polling with async loop
-- `crates/bw-server/Cargo.toml` — add `sha2` dev-dependency
-- `crates/bw-server/tests/f3_relay_polling_test.rs` — 4 new regression tests (3 pass, 1 flaky)
+No active in-progress work. Ready for next work package.
 
 ---
 
@@ -562,10 +563,7 @@ Changes in working tree:
 
 **Immediate next engineering actions:**
 
-1. **Commit the F3 changes** — async relay polling fix + tests (3 files modified, 1 new test file)
-2. **Delete junk files** — `package.json` (empty) and `t --workspace` (accidental)
-3. **Fix F3 test flakiness** — `test_graceful_cancellation` timing assertion
-4. **Update stale documentation** — `README.md` (says 9 crates), `HANDOFF.md` (says 228 tests)
+1. **Update stale documentation** — `README.md` (says 9 crates), `HANDOFF.md` (says 228 tests)
 
 **Next feature work package (TBD):**
 
@@ -662,6 +660,7 @@ grep -rn "unimplemented!\|todo!\|FIXME\|HACK\|XXX" crates/*/src/
 | Date | Change | Author |
 |---|---|---|
 | 2026-09-03 | Initial source-of-truth document created | Buffy (AI) |
+| 2026-09-03 | F3 completion recorded, document updated | Buffy (AI) |
 
 ### Stale Documents (index only — do not trust for current state)
 
