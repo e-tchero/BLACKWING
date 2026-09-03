@@ -15,7 +15,7 @@
 | **Branch** | `main` |
 | **Remote** | `origin` → `https://github.com/e-tchero/BLACKWING.git` |
 | **Verification method** | Direct source inspection, `cargo test --workspace`, `cargo clippy`, `cargo bench --no-run`, `git log`, `git diff` |
-| **Document author** | Buffy (AI agent, Freebuff) |
+| **Document author** | ETCHERO |
 
 **Conflict resolution:** Where this document disagrees with `HANDOFF.md`, `WP_CHANGELOG.md`, `README.md`, or any `.docx` specification, **this document's evidence takes precedence** because it was verified against the actual repository state on the date above. Stale documents are indexed in Section 24.
 
@@ -659,8 +659,8 @@ grep -rn "unimplemented!\|todo!\|FIXME\|HACK\|XXX" crates/*/src/
 
 | Date | Change | Author |
 |---|---|---|
-| 2026-09-03 | Initial source-of-truth document created | Buffy (AI) |
-| 2026-09-03 | F3 completion recorded, document updated | Buffy (AI) |
+| 2026-09-03 | Initial source-of-truth document created | ETCHERO |
+| 2026-09-03 | F3 completion recorded, document updated | ETCHERO |
 
 ### Stale Documents (index only — do not trust for current state)
 
