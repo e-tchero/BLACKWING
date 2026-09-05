@@ -2,7 +2,9 @@
 
 This is the first document every contributor reads. It outlines the physical structure of the workspace.
 
-Last Updated: 2026-08-21
+> For authoritative current project state (test counts, security chain, F3 status), read `BLACKWING_SOURCE_OF_TRUTH.md`.
+
+Last Updated: 2026-09-03
 
 ## Commit Policy
 
@@ -55,7 +57,7 @@ BLACKWING/
 │   │   │   ├── scheduler.rs      # DRR priority scheduler for QUIC streams
 │   │   │   ├── transport.rs      # MockTransport for testing
 │   │   │   └── error.rs          # ProtocolError enum
-│   │   ├── tests/                # 11 test files, 83 tests
+│   │   ├── tests/                # 14 test files, 107 tests
 │   │   └── benches/              # 2 bench files (crypto_bench, placeholder)
 │   │
 │   ├── bw-net/                   # Network I/O layer
@@ -84,7 +86,7 @@ BLACKWING/
 │   │   │   ├── cert.rs           # Certificate management
 │   │   │   ├── ice_socket.rs     # ICE socket binding
 │   │   │   └── relay_socket.rs   # RelayUdpSocket
-│   │   └── tests/                # 4 test files, 6 tests
+│   │   └── tests/                # 5 test files, 15 tests
 │   │
 │   ├── bw-auth/                  # OPAQUE PAKE authentication (RFC 9381)
 │   │   ├── src/
@@ -104,7 +106,7 @@ BLACKWING/
 │   │   │   ├── monitor.rs        # Monitor enumeration
 │   │   │   ├── thread.rs         # Capture thread management
 │   │   │   └── windows/          # DXGI and WGC backends
-│   │   └── tests/                # 1 test file, 9 tests
+│   │   └── tests/                # 1 test file, 13 tests
 │   │
 │   ├── bw-encoder/               # H.264 video encoding
 │   │   ├── src/
@@ -133,7 +135,7 @@ BLACKWING/
 │   │   │   ├── clock.rs          # Time management
 │   │   │   ├── protocol.rs       # Relay protocol
 │   │   │   └── server.rs         # Relay server
-│   │   └── tests/                # 2 test files, 33 tests
+│   │   └── tests/                # 5 test files, 71 tests
 │   │
 │   ├── bw-ice/                   # ICE/STUN agent (wraps webrtc-ice)
 │   │   ├── src/
@@ -149,7 +151,7 @@ BLACKWING/
 │   │   │   ├── inject.rs         # SendInput wrapper
 │   │   │   ├── input.rs          # Input event types
 │   │   │   └── error.rs
-│   │   └── tests/                # 1 test file, 9 tests
+│   │   └── tests/                # 1 test file, 10 tests
 │   │
 │   ├── bw-clipboard/             # Clipboard management
 │   │   ├── src/
@@ -171,13 +173,13 @@ BLACKWING/
 │   ├── bw-client/                # Desktop client application
 │   │   ├── src/
 │   │   │   └── main.rs           # winit rendering loop, video decode, input capture
-│   │   └── tests/                # 5 inline tests
+│   │   └── tests/                # 12 inline tests
 │   │
 │   └── bw-server/                # Host server application
 │       ├── src/
 │       │   ├── lib.rs
 │       │   └── main.rs           # Dispatcher, input injection, audio, clipboard
-│       └── tests/                # 4 test files, 16 tests
+│       └── tests/                # 6 test files, 33 tests
 │
 ├── docs/                         # Specifications & ADRs
 │   ├── REPOSITORY_MAP.md         # This file
@@ -193,8 +195,9 @@ BLACKWING/
 │
 ├── Cargo.toml                    # Workspace root (17 members, workspace lints)
 ├── Cargo.lock                    # Committed (reproducible builds)
-├── HANDOFF.md                    # Master handoff document (this file's companion)
-├── WP_CHANGELOG.md               # Work package history
+├── BLACKWING_SOURCE_OF_TRUTH.md  # Canonical project-state document (read first)
+├── HANDOFF.md                    # Historical handoff record (superseded by source of truth)
+├── WP_CHANGELOG.md               # Historical work-package changelog
 ├── BLACKWING_ENGINEERING_BASELINE.md
 └── README.md
 ```
@@ -222,11 +225,13 @@ Each crate opts in with `[lints] workspace = true` in its `Cargo.toml`.
 | Metric | Value |
 |---|---|
 | Workspace crates | 17 |
-| Source modules | 80+ |
-| Integration test files | 38 |
-| Tests | 228 (0 failures) |
+| Source modules | 90+ |
+| Integration test files | 47 |
+| Tests | 364 (0 failures), incl. 59 Phase 3 adversarial tests |
 | Benchmark binaries | 21 |
-| `unsafe` blocks | 0 |
-| `unimplemented!()` | 0 |
+| `unsafe` blocks | Only in `bw-capture` (COM/DXGI) and `bw-input` (Win32 FFI) — explicit `#![allow(unsafe_code)]` overrides with safety comments |
+| `unimplemented!()` | 3 — TPM backend stubs (`bw-crypto/src/backend/tpm.rs`, unreachable in normal paths) |
 | `todo!()` | 0 |
 | `unwrap()` in library code | 0 |
+
+**Security chain:** C1/C2/C3, H1, L-K1, H3, H5/H6, M1/M2/M3/M6 complete (M7/M8 verified). **F3 relay polling:** CLOSED (commit `1fd53e9`).

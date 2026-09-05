@@ -11,7 +11,7 @@
 | Field | Value |
 |---|---|
 | **Last verified** | 2026-09-03 |
-| **Repository commit** | `1fd53e9` (HEAD of `main`) |
+| **Repository commit** | `6de4734` (HEAD of `main`) |
 | **Branch** | `main` |
 | **Remote** | `origin` → `https://github.com/e-tchero/BLACKWING.git` |
 | **Verification method** | Direct source inspection, `cargo test --workspace`, `cargo clippy`, `cargo bench --no-run`, `git log`, `git diff` |
@@ -45,22 +45,15 @@ Comparable to RustDesk in scope, with stronger cryptographic identity guarantees
 | Field | Value |
 |---|---|
 | Branch | `main` |
-| HEAD commit | `722ad9f` — `test: fix end-to-end streaming harness lifecycle` |
+| HEAD commit | `6de4734` — `docs(blackwing): record F3 completion, remove AI attribution from source of truth` |
 | Remote tracking | `origin/main` |
-| Local branch state | **Ahead 9 commits** from upstream |
-| Working tree | **3 modified files + 1 untracked test file + 2 junk files** |
-| Tags | 34 tags (recovery-baseline through wp-10.0-complete) |
+| Local branch state | **In sync** with `origin/main` |
+| Working tree | **Clean** (no modified, untracked, or junk files) |
+| Tags | 34 tags (recovery-baseline through wp-opaque-auth, pre-bugfix-live-test) |
 
-### 3.2 Working Tree (uncommitted changes)
+### 3.2 Working Tree
 
-| File | Status | Description |
-|---|---|---|
-| `Cargo.lock` | Modified | Dependency lock update |
-| `crates/bw-server/Cargo.toml` | Modified | Adds `sha2 = "0.10"` dev-dependency for F3 tests |
-| `crates/bw-server/src/main.rs` | Modified | **F3 FIX:** Replaces blocking `rt.block_on()` relay polling with proper async `.await` loop |
-| `crates/bw-server/tests/f3_relay_polling_test.rs` | **Untracked** | New F3 regression tests (4 tests, 1 flaky) |
-| `package.json` | **Untracked** | Empty `{}` — junk file, should be deleted |
-| `t --workspace` | **Untracked** | Accidental file — should be deleted |
+**Clean** — no uncommitted changes. The F3 changes were committed (`1fd53e9`), and the junk files (`package.json`, `t --workspace`) were deleted as part of the F3 completion record.
 
 ### 3.3 Branches
 
@@ -205,7 +198,7 @@ dbg_macro = "deny"
 
 | Work | Status | Evidence |
 |---|---|---|
-| CI/CD pipeline | **NOT IMPLEMENTED** | No `.github/workflows/*.yml` found |
+| CI/CD pipeline | **SKELETON (stale)** | A tracked `.github/workflows/ci.yml` exists (`1444a36`, 2026-08-14) but is stale/incomplete: fmt/clippy/test only, missing `--all-features` and release-build steps |
 | Cross-platform support | **NOT IMPLEMENTED** | Windows-only (DXGI, Win32 FFI) |
 | Production QUIC tuning | **NOT IMPLEMENTED** | Default quinn config |
 | Cursor bitmap rendering | **NOT IMPLEMENTED** | `CursorInfo.bitmap = None` always; only crosshair overlay |
@@ -472,12 +465,7 @@ Sender task → session.send_message() → QUIC stream → client
 
 ### 13.2 Uncommitted Changes
 
-| Change | Status |
-|---|---|
-| ~~F3 async relay polling fix~~ | ✅ Committed `1fd53e9` |
-| ~~F3 regression tests~~ | ✅ Committed — 4/4 pass, 0 flaky |
-| ~~`sha2` dev-dependency~~ | ✅ Committed |
-| ~~Junk files (`package.json`, `t --workspace`)~~ | ✅ Deleted |
+**None.** All F3 changes were committed (`1fd53e9`); the junk files (`package.json`, `t --workspace`) were deleted.
 
 ---
 
@@ -488,7 +476,7 @@ Sender task → session.send_message() → QUIC stream → client
 | Windows-only | DXGI capture and Win32 FFI are Windows-specific |
 | No CI/CD | No GitHub Actions workflow |
 | No cross-platform input injection | Linux/macOS backends not implemented |
-| No TLS certificate verification (dev mode) | `SkipServerVerification` in QUIC client |
+| Development-only TLS bypass (`--dev-insecure`) | `SkipServerVerification` reachable only via the explicit opt-in `--dev-insecure` development path; production always verifies via certificate pinning (H5) |
 | No production QUIC tuning | Default quinn MTU/congestion settings |
 | No cursor bitmap rendering | Only crosshair overlay |
 | No file transfer | Not in scope |
@@ -581,7 +569,7 @@ The project has completed the full remote desktop vertical slice. Potential next
 
 | Area | Priority | Status |
 |---|---|---|
-| CI/CD pipeline (GitHub Actions) | High | NOT STARTED |
+| CI/CD pipeline (GitHub Actions) | High | SKELETON — stale `.github/workflows/ci.yml` exists (`1444a36`), awaiting completion |
 | Cross-platform capture (Linux/Wayland, macOS CGDisplay) | Medium | NOT STARTED |
 | Cross-platform input injection (X11, macOS) | Medium | NOT STARTED |
 | Production QUIC tuning | Medium | NOT STARTED |
@@ -661,18 +649,19 @@ grep -rn "unimplemented!\|todo!\|FIXME\|HACK\|XXX" crates/*/src/
 |---|---|---|
 | 2026-09-03 | Initial source-of-truth document created | ETCHERO |
 | 2026-09-03 | F3 completion recorded, document updated | ETCHERO |
+| 2026-09-03 | DOC refresh: corrected §1/§3 git state, §6.3/§20 CI skeleton status, §14 TLS wording | ETCHERO |
 
-### Stale Documents (index only — do not trust for current state)
+### Document Status (index)
 
 | Document | Last Updated | Issue |
 |---|---|---|
-| `HANDOFF.md` | 2026-08-21 | Test count says 228 — actual is 364. Says "no CI/CD pipeline needed yet" — still true. |
-| `WP_CHANGELOG.md` | 2026-08-21 | Test count says 228 — actual is 364. Does not include display fixes, cursor overlay, frame timer. |
+| `README.md` | 2026-09-03 | ✅ **REFRESHED** — 17 crates, current feature/security state, accurate limitations. |
+| `HANDOFF.md` | 2026-09-03 | ✅ **REFRESHED** — defers to this document as source of truth; 364 tests; F3 closed; CI skeleton wording. Historical record. |
+| `WP_CHANGELOG.md` | 2026-09-03 | ✅ **REFRESHED** — current-status summary corrected (364 tests, security chain, F3); historical sections preserved as history. |
+| `docs/REPOSITORY_MAP.md` | 2026-09-03 | ✅ **REFRESHED** — per-crate and total test counts corrected; metrics updated. |
+| `docs/WORKSPACE_VISION.md` | 2026-09-03 | ✅ **REFRESHED** — original vision marked historical; current 17-crate workspace added. |
 | `BLACKWING_ENGINEERING_BASELINE.md` | 2026-07-06 | Refers to "1 crate" — now 17. Entirely historical. |
 | `BLACKWING_RECOVERY_STATUS.md` | 2026-07-06 | Refers to "Milestone 1" — project is far beyond that. Entirely historical. |
-| `README.md` | Unknown | Says "9 crates" — actual is 17. Says "no input/clipboard/audio" — all implemented. |
-| `docs/REPOSITORY_MAP.md` | 2026-08-21 | Test count says 228 — actual is 364. |
-| `docs/WORKSPACE_VISION.md` | Unknown | Does not list bw-clipboard, bw-audio, bw-ice, bw-auth, bw-decoder. |
 | `docs/work_packages/*.docx` | Unknown | Binary format — cannot verify content alignment. |
 | `docs/architecture/*.docx` | Unknown | Binary format — cannot verify content alignment. |
 

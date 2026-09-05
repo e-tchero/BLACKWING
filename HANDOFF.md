@@ -1,10 +1,14 @@
 # PROJECT BLACKWING — Master Handoff Document
 
-> **CRITICAL:** If you are a new AI agent reading this, read this document top-to-bottom BEFORE touching any file or running any command. This document is the single source of truth for the current state of this project.
+> **NOTE ON AUTHORITY:** This document is a **historical handoff record**.
+> The canonical, authoritative project-state document is
+> **`BLACKWING_SOURCE_OF_TRUTH.md`** — read it first, before touching any file
+> or running any command. Where this document disagrees with the source of
+> truth, the source of truth (verified against the live repository) wins.
 >
-> **Last Updated:** 2026-08-21
+> **Last Updated:** 2026-09-03
 > **Repository Root:** `C:\BLACKWING`
-> **Current Phase:** Full-stack implementation complete. Production hardening and CI/CD in progress.
+> **Current Phase:** Full-stack implementation, security hardening, and F3 relay polling complete. Documentation refresh in progress.
 
 ---
 
@@ -101,7 +105,7 @@ cargo <command>   # if the default toolchain is already set to GNU
 |---|---|
 | `cargo fmt --check` | ✅ Clean (exit 0) |
 | `cargo check --workspace` | ✅ 0 errors, 0 warnings |
-| `cargo test --workspace` | ✅ **228/228 tests pass** |
+| `cargo test --workspace` | ✅ **364/364 tests pass** |
 | `cargo clippy --workspace -- -D warnings` | ✅ 0 warnings |
 | `cargo bench --no-run --workspace` | ✅ 21 benchmark binaries compile |
 
@@ -140,21 +144,21 @@ members = [
 |---|---|---|---|
 | **bw-core** | Error types, logging, zero-alloc memory pools | ✅ Complete | 17 |
 | **bw-crypto** | Ed25519 identity, HMAC-SHA256, HKDF, symmetric encryption | ✅ Complete | 13 |
-| **bw-protocol** | Wire protocol: frames, headers, CBOR messages, codec, dispatcher, encryption, reliability, session management, handshake, routing, scheduler | ✅ Complete | 83 |
+| **bw-protocol** | Wire protocol: frames, headers, CBOR messages, codec, dispatcher, encryption, reliability, session management, handshake, routing, scheduler | ✅ Complete | 107 |
 | **bw-net** | UDP transport, receive loop, connection manager, protocol adapter | ✅ Complete | 5 |
 | **bw-session** | Session lifecycle, secure connection, wire protocol bridge | ✅ Complete | 4 |
-| **bw-transport** | QUIC client/server, ICE socket binding, relay socket, certificate management, protocol adapter | ✅ Complete | 6 |
+| **bw-transport** | QUIC client/server, ICE socket binding, relay socket, certificate management, protocol adapter | ✅ Complete | 15 |
 | **bw-auth** | OPAQUE PAKE authentication (RFC 9381), client/server | ✅ Complete | 4 |
-| **bw-capture** | DXGI/WGC screen capture, frame buffers, cursor tracking | ✅ Complete | 9 |
+| **bw-capture** | DXGI/WGC screen capture, frame buffers, cursor tracking | ✅ Complete | 13 |
 | **bw-encoder** | H.264 video encoding pipeline | ✅ Complete | 1 |
 | **bw-decoder** | H.264 video decoding pipeline | ✅ Complete | 6 |
-| **bw-relay** | Relay server, forwarding, rendezvous, NAT traversal, rate limiting | ✅ Complete | 33 |
+| **bw-relay** | Relay server, forwarding, rendezvous, NAT traversal, rate limiting | ✅ Complete | 71 |
 | **bw-ice** | ICE/STUN agent wrapping webrtc-ice | ✅ Complete | 4 |
-| **bw-input** | Win32 SendInput injection, keyboard/mouse mapping | ✅ Complete | 9 |
+| **bw-input** | Win32 SendInput injection, keyboard/mouse mapping | ✅ Complete | 10 |
 | **bw-clipboard** | Clipboard polling, text/image roundtrip | ✅ Complete | 7 |
 | **bw-audio** | Opus audio capture/playback via cpal | ✅ Complete | 5 |
-| **bw-client** | Desktop client application (winit rendering loop) | ✅ Complete | 5 |
-| **bw-server** | Host server (dispatcher, input injection, audio, clipboard) | ✅ Complete | 16 |
+| **bw-client** | Desktop client application (winit rendering loop) | ✅ Complete | 12 |
+| **bw-server** | Host server (dispatcher, input injection, audio, clipboard) | ✅ Complete | 33 |
 
 ---
 
@@ -203,9 +207,11 @@ members = [
 | `wp-5.0-complete` | Network bootstrap, UDP transport, receive loop. |
 | `wp-6.x-complete` | QUIC transport, protocol adapter, secure connection lifecycle. |
 | `wp-7.0-complete` | Screen capture pipeline (DXGI/WGC). |
-| `wp-8.0-complete` | Relay server, forwarding, rendezvous, NAT traversal. |
+| `wp-8.0-phase2/3/4-complete` | Relay server, forwarding, rendezvous, NAT traversal, transport integration. |
 | `wp-9.0-complete` | H.264 video encoding. |
-| `wp-10.0-complete` | Input injection, clipboard, audio, client/server applications. |
+| `wp-opaque-auth` | OPAQUE PAKE authentication (RFC 9381). |
+| `pre-bugfix-live-test` | Live-test bugfix round (panics, reconnect flood, DXGI crash, session isolation). |
+| *(no tag)* | WP-10.0 integration, security hardening (C1–C3/H1/L-K1/H3/H5/H6/M1/M2/M3/M6), Phase 3 adversarial validation, F3 relay polling. |
 
 ---
 
@@ -232,13 +238,16 @@ members = [
 
 ### Current State
 
-**All planned work packages through WP-10.0 are complete.** The codebase has:
+**All work packages through WP-10.0, the security hardening phases, Phase 3 adversarial validation, and F3 are complete.** The codebase has:
 - 17 workspace crates
-- 228 passing tests (0 failures)
+- 364 passing tests (0 failures), including 59 Phase 3 adversarial tests
 - 21 benchmark binaries
-- Zero `unimplemented!()`, `todo!()`, `unsafe`, or `unwrap()` in library code
+- Security chain: C1/C2/C3, H1, L-K1, H3, H5/H6, M1/M2/M3/M6 (M7/M8 verified)
+- F3 relay polling: **CLOSED** — committed `1fd53e9`, deterministic `AtomicU32`-synchronized tests (verified 10/10), 0 warnings
+- `unimplemented!()` limited to the unreachable TPM backend stubs (3)
+- `unsafe` limited to `bw-capture` (COM/DXGI) and `bw-input` (Win32 FFI) with explicit `#![allow(unsafe_code)]` overrides
 - Workspace-wide lint enforcement (`unsafe_code = "forbid"`, `clippy::unwrap_used = "deny"`)
-- No CI/CD pipeline yet (GitHub Actions workflow needed)
+- CI: a tracked `.github/workflows/ci.yml` exists (`1444a36`, 2026-08-14) but is a **stale/incomplete skeleton** (fmt/clippy/test only; missing `--all-features` and release-build steps) awaiting CI completion
 
 ---
 
@@ -269,7 +278,7 @@ cargo bench --no-run --workspace
 
 | Question | Context | Priority |
 |---|---|---|
-| CI/CD pipeline | No GitHub Actions workflow exists. Needed before external contributors. | High |
+| CI/CD pipeline | A tracked `.github/workflows/ci.yml` exists but is a stale/incomplete skeleton (predates the security work; missing `--all-features` and release build). Needs completion. | High |
 | Production QUIC configuration | Current QUIC defaults are functional but not tuned for production (MTU, congestion control). | Medium |
 | Cross-platform support | Currently Windows-only (DXGI, Win32 SendInput). Linux/macOS backends needed. | Medium |
 
@@ -305,4 +314,4 @@ git tag                    # list all tags
 
 ---
 
-*This document is the canonical handoff document. Update it after every work package completion.*
+*This document is a historical handoff record. The canonical project-state document is `BLACKWING_SOURCE_OF_TRUTH.md`. Update both after every work package completion.*

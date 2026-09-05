@@ -4,6 +4,8 @@
 //! the `bw-server` binary uses at startup and that the E2E integration test
 //! (TASK-107) exercises against a recording injection backend.
 
+pub mod rendezvous;
+
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 

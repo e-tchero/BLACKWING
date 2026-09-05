@@ -1,7 +1,12 @@
 # Work Package & Architecture Changelog
 
-**Last Updated:** 2026-08-21
-**Phase:** Full-stack implementation complete
+**Last Updated:** 2026-09-03
+**Phase:** Full-stack implementation, security hardening, and F3 relay polling complete
+
+> **Note on authority:** This document is the **historical work-package record**.
+> For the authoritative current project state, read `BLACKWING_SOURCE_OF_TRUTH.md`,
+> which is verified against the live repository. Historical sections below are
+> preserved as history; the "Current Status Summary" at the end reflects today's state.
 
 This document tracks every structural, architectural, and work package change made to PROJECT BLACKWING. It is written so that any engineer or AI agent can understand exactly what happened, in what order, and why.
 
@@ -234,6 +239,78 @@ Integrated all subsystems into working client/server applications:
 
 ---
 
+## OPAQUE Authentication (Completed)
+
+Implemented RFC 9381 OPAQUE PAKE authentication:
+- Client-side and server-side OPAQUE in `bw-auth`
+- Credential store with password verification
+- Password never leaves either peer
+- Tagged `wp-opaque-auth`
+
+---
+
+## Live-Test Bugfix Round (Completed)
+
+Resolved 4 critical runtime bugs discovered during live testing:
+- Hot-path panics
+- Reconnect flood
+- DXGI crash
+- Session isolation
+- Tagged `pre-bugfix-live-test` (commit `29a556a`)
+
+---
+
+## Display Fixes, Cursor Overlay, Frame Timer (Completed)
+
+- Mouse cursor absolute positioning fix (`8b154cd`)
+- Display blit rewrite: row-by-row scaling, jitter/duplication fix (`8b154cd`)
+- Cursor compositing overlay + DXGI cursor extraction (`52840bb`)
+- Frame timer with idle refresh and periodic IDR keyframes (`52840bb`)
+
+---
+
+## Security Hardening — Phase 1 (Completed)
+
+Red-team Phase 0 findings C1/C2/C3 and Phase 1 findings H5/H6:
+- C1: Relay token security — session-scoped, relay-generated authorization via the existing CandidateExchange control plane (`e6e7f84`)
+- C2: Fragment reassembly bounded at 4 MiB
+- C3: CBOR deserialization bounded before allocation
+- H5: TLS certificate identity/pinning — SPKI bound to DeviceId (`0140423`)
+- H6: Dynamic SNI derived from destination (no hardcoded localhost)
+
+---
+
+## Security Hardening — Phase 2 (Completed)
+
+Red-team Phase 1 findings H1, L-K1, H3 and Phase 2 findings M1/M2/M3/M6:
+- H1: Automatic key rotation — `KeyRotationPolicy::Counter(10_000)` in production sessions (`2390424`)
+- L-K1: Authenticated epoch transition — candidate-key-then-commit; forged epochs cannot rotate receiver state
+- H3: Authentication rate limiting — handshake semaphore (4 concurrent), per-IP limiter, timeout (`66ce31f`)
+- M1: Clipboard payload limits (text + image dimensions)
+- M2: Relay registration capacity + stale cleanup
+- M3: Relay intent capacity + automatic sweep
+- M6: Blocklist bounds + expiry (`1a09a0e`)
+- M4/M5/M7/M8: Re-audited — superseded by H5/H6/C1 work or verified safe
+
+---
+
+## Phase 3 — Adversarial Validation (Completed)
+
+- 59 adversarial tests across protocol fuzzing, crypto state-machine attacks, and relay adversarial scenarios (`4bfe337`)
+- Findings: 0 Critical / 0 High / 0 Medium / 0 Low; 2 informational (both design-correct)
+- Fixed the `test_end_to_end_streaming` harness lifecycle (`722ad9f`)
+
+---
+
+## F3 — Relay Polling Lifecycle (Completed)
+
+- Replaced the finite 15×2s blocking polling loop with continuous async polling (`1fd53e9`)
+- Cancellation-safe via Tokio drop semantics; no nested runtime
+- Deterministic `AtomicU32`-synchronized tests (4/4, verified 10/10, 0 flaky)
+- **Status: F3 CLOSED**
+
+---
+
 ## Architectural Principles Established (Locked)
 
 These decisions are locked. Do not reverse without creating a new ADR.
@@ -258,11 +335,16 @@ These decisions are locked. Do not reverse without creating a new ADR.
 | Metric | Value |
 |---|---|
 | Workspace crates | 17 |
-| Source modules | 80+ |
-| Tests | 228 (0 failures) |
+| Source modules | 90+ |
+| Tests | 364 (0 failures), incl. 59 adversarial |
 | Benchmark binaries | 21 |
-| `unsafe` blocks | 0 |
-| `unimplemented!()` calls | 0 |
+| `unsafe` blocks | Only in `bw-capture` (COM/DXGI) and `bw-input` (Win32 FFI), with explicit `#![allow(unsafe_code)]` overrides and safety comments |
+| `unimplemented!()` calls | 3 — all in `bw-crypto/src/backend/tpm.rs` (TPM stub, unreachable in normal paths) |
 | `todo!()` calls | 0 |
 | `unwrap()` in library code | 0 |
 | `expect()` in library code | 0 |
+| Security chain | C1/C2/C3, H1, L-K1, H3, H5/H6, M1/M2/M3/M6 complete (M7/M8 verified) |
+| F3 relay polling | CLOSED — `1fd53e9` |
+| CI/CD | Stale/incomplete skeleton exists (`.github/workflows/ci.yml`, `1444a36`) — awaiting completion |
+
+**Historical note:** older entries in this changelog recorded 228 tests and 0 `unsafe`/`unimplemented!()` blocks; those numbers reflected earlier points in time. The values above are the verified current state.

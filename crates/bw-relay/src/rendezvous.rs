@@ -225,16 +225,24 @@ impl RendezvousRegistry {
         Ok(intent.initiator)
     }
 
-    /// Returns all pending ConnectIntents targeting a device.
+    /// Returns all non-expired pending ConnectIntents targeting a device.
+    ///
+    /// RT-002 FIX: intents past [`INTENT_TIMEOUT_MS`] are filtered out before
+    /// delivery so a stale intent can never reach a target's polling loop and
+    /// cause a fatal acceptance error. Expiry is still re-checked in
+    /// [`Self::accept_intent`] as defense in depth.
     pub fn pending_for(&self, target: DeviceId) -> Vec<([u8; 16], DeviceId)> {
         let intents = match self.intents.read() {
             Ok(i) => i,
             Err(_) => return vec![],
         };
+        let now = self.clock.now_ms();
+        let stale_before = now.saturating_sub(INTENT_TIMEOUT_MS);
         let mut result = Vec::new();
         for (id, intent) in intents.iter() {
             if intent.target == target
-                && let IntentState::Pending { .. } = &intent.state
+                && let IntentState::Pending { created_at } = &intent.state
+                && *created_at > stale_before
             {
                 result.push((*id, intent.initiator));
             }

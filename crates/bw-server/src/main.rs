@@ -267,11 +267,17 @@ async fn run_server(
     }
     eprintln!("TLS certificate SANs: {:?}", san_listeners);
 
-    // Optional relay data-plane routing via CandidateExchange.
-    // C1 FIX: obtain the relay token through the authenticated control-plane
-    // flow instead of generating an independent random token.
-    // F3 FIX: continuous polling with cancellation-safe shutdown.
-    let quic_server = if let Some(relay_addr) = relay {
+    // H3 FIX: admission control — semaphore + per-IP rate limiter.
+    let handshake_semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_HANDSHAKES));
+    let rate_limiter = Arc::new(PerIpRateLimiter::new());
+
+    if let Some(relay_addr) = relay {
+        // ── Relay mode: rendezvous lifecycle (RT-001/RT-002 FIX) ──────────
+        // The relay control client stays registered and the rendezvous loop
+        // runs for the server's lifetime: poll → accept → serve one session →
+        // return to polling. Per-intent failures (expired/rejected intents)
+        // are skipped, never fatal, and an initiator that never connects is
+        // abandoned after INITIATOR_CONNECT_TIMEOUT so polling resumes.
         let relay_sock: std::net::SocketAddr = relay_addr.parse()?;
 
         // Register with the relay control plane.
@@ -281,96 +287,167 @@ async fn run_server(
         relay_client.register().await?;
         eprintln!("registered with relay");
 
-        // F3: Continuously poll for pending ConnectIntents until one arrives.
-        // Uses async sleep (no busy loop) and is cancellation-safe via tokio select.
-        eprintln!("polling relay for pending connections...");
-        let poll_interval = std::time::Duration::from_secs(2);
-        let relay_token = loop {
-            let intents = relay_client.poll_pending_intents().await?;
-            if let Some((intent_id, initiator)) = intents.into_iter().next() {
-                eprintln!("received connect intent from initiator");
-                // Accept the intent — relay generates the token.
-                let (token, _initiator_candidates) = relay_client
-                    .accept_connect(intent_id, initiator, vec![])
-                    .await?;
-                break Some(token);
-            }
-            tokio::time::sleep(poll_interval).await;
-        };
+        let driver = bw_server::rendezvous::RendezvousDriver::new(
+            relay_client,
+            bw_server::rendezvous::RELAY_POLL_INTERVAL,
+            bw_server::rendezvous::INITIATOR_CONNECT_TIMEOUT,
+        );
+        eprintln!("relay rendezvous active — polling for connection intents");
 
-        let token = relay_token.ok_or("relay polling cancelled")?;
-        eprintln!("relay authorization obtained via CandidateExchange");
-        QuicServer::bind(
-            listen_addr,
-            Some((relay_sock, token)),
-            &tls_keypair,
-            san_listeners,
-        )?
-    } else {
-        QuicServer::bind(listen_addr, None, &tls_keypair, san_listeners)?
-    };
+        let serve = |token: [u8; 32], initiator_timeout: std::time::Duration| {
+            let tls_keypair = &tls_keypair;
+            let san_listeners = san_listeners.clone();
+            let store = Arc::clone(&store);
+            let dispatcher = Arc::clone(&dispatcher);
+            let session_manager = Arc::clone(&session_manager);
+            let handshake_semaphore = Arc::clone(&handshake_semaphore);
+            let rate_limiter = Arc::clone(&rate_limiter);
+            async move {
+                // Bind a per-session QUIC endpoint carrying the relay-issued
+                // session token (C1: relay-generated, session-scoped).
+                let session_server = match QuicServer::bind(
+                    listen_addr,
+                    Some((relay_sock, token)),
+                    tls_keypair,
+                    san_listeners,
+                ) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        eprintln!("relay session bind failed: {e}");
+                        return;
+                    }
+                };
+                eprintln!("relay session endpoint bound — waiting for initiator");
 
-    // H3 FIX: admission control — semaphore + per-IP rate limiter.
-    let handshake_semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_HANDSHAKES));
-    let rate_limiter = Arc::new(PerIpRateLimiter::new());
+                // RT-001: bound the wait for the initiator. An intent whose
+                // initiator never establishes the data-plane connection must
+                // not block rendezvous polling indefinitely.
+                let conn = match tokio::time::timeout(initiator_timeout, session_server.accept())
+                    .await
+                {
+                    Ok(Some(conn)) => conn,
+                    Ok(None) => {
+                        eprintln!("relay session endpoint closed before the initiator connected");
+                        return;
+                    }
+                    Err(_) => {
+                        eprintln!(
+                            "initiator did not connect within {initiator_timeout:?} — abandoning session and returning to polling"
+                        );
+                        return;
+                    }
+                };
 
-    eprintln!("server ready — max concurrent handshakes: {MAX_CONCURRENT_HANDSHAKES}");
-    loop {
-        let Some(conn) = quic_server.accept().await else {
-            continue;
-        };
-
-        // H3: extract remote IP for per-IP admission control.
-        let remote_ip = conn.remote_address().ip();
-
-        // H3: per-IP rate limit check.
-        if !rate_limiter.check_and_record(remote_ip) {
-            eprintln!("rate limit exceeded for {remote_ip} — rejecting");
-            conn.close(0u32.into(), b"rate limit exceeded");
-            continue;
-        }
-
-        // H3: acquire handshake permit BEFORE spawning expensive work.
-        // Use try_acquire_owned so we never queue unlimited tasks.
-        let permit = match handshake_semaphore.clone().try_acquire_owned() {
-            Ok(p) => p,
-            Err(_) => {
-                eprintln!("handshake limit reached — rejecting {remote_ip}");
-                conn.close(0u32.into(), b"too many concurrent handshakes");
-                continue;
-            }
-        };
-
-        eprintln!("connection accepted from {remote_ip}");
-        let dispatcher = Arc::clone(&dispatcher);
-        let session_manager = Arc::clone(&session_manager);
-        let store = Arc::clone(&store);
-        tokio::spawn(async move {
-            // H3: wrap the entire handshake + session in a timeout.
-            let result = tokio::time::timeout(
-                HANDSHAKE_TIMEOUT,
-                handle_session(
+                // Serve exactly one session; rendezvous polling resumes when
+                // it ends (RT-001: accepting an intent never terminates the
+                // polling lifecycle).
+                if let Some(task) = spawn_session_task(
                     conn,
-                    &store,
-                    &dispatcher,
-                    &session_manager,
+                    handshake_semaphore,
+                    rate_limiter,
+                    store,
+                    dispatcher,
+                    session_manager,
                     server_device_id,
-                ),
-            )
-            .await;
-
-            // H3: release the permit when done (drop on scope exit).
-            drop(permit);
-
-            match result {
-                Ok(Ok(())) => {}
-                Ok(Err(e)) => eprintln!("session error: {e}"),
-                Err(_) => eprintln!("handshake/session timed out for {remote_ip}"),
+                ) {
+                    let _ = task.await;
+                }
             }
-        });
+        };
+
+        // Runs until a systemic control-plane failure (fail closed) or
+        // process shutdown (cancellation-safe).
+        driver.run(serve).await?;
+    } else {
+        // ── Direct LAN mode: bind once and accept concurrently. ──────────
+        let quic_server = QuicServer::bind(listen_addr, None, &tls_keypair, san_listeners)?;
+
+        eprintln!("server ready — max concurrent handshakes: {MAX_CONCURRENT_HANDSHAKES}");
+        loop {
+            let Some(conn) = quic_server.accept().await else {
+                continue;
+            };
+            // Fire-and-forget: direct LAN mode serves concurrent sessions.
+            let _ = spawn_session_task(
+                conn,
+                Arc::clone(&handshake_semaphore),
+                Arc::clone(&rate_limiter),
+                Arc::clone(&store),
+                Arc::clone(&dispatcher),
+                Arc::clone(&session_manager),
+                server_device_id,
+            );
+        }
     }
+
+    Ok(())
 }
 
+/// Applies H3 admission control to one accepted QUIC connection and spawns
+/// the authenticated-session handler.
+///
+/// Returns the spawned task handle so the caller can either await it
+/// (relay mode — sessions are served sequentially) or detach it
+/// (direct LAN mode — concurrent sessions).
+///
+/// Returns `None` when admission control rejects the connection (rate limit
+/// or handshake limit); the connection is closed before returning.
+fn spawn_session_task(
+    conn: quinn::Connection,
+    handshake_semaphore: Arc<Semaphore>,
+    rate_limiter: Arc<PerIpRateLimiter>,
+    store: Arc<EnrollmentStore>,
+    dispatcher: Arc<MessageDispatcher>,
+    session_manager: Arc<SessionManager>,
+    server_device_id: bw_crypto::DeviceId,
+) -> Option<tokio::task::JoinHandle<()>> {
+    // H3: extract remote IP for per-IP admission control.
+    let remote_ip = conn.remote_address().ip();
+
+    // H3: per-IP rate limit check.
+    if !rate_limiter.check_and_record(remote_ip) {
+        eprintln!("rate limit exceeded for {remote_ip} — rejecting");
+        conn.close(0u32.into(), b"rate limit exceeded");
+        return None;
+    }
+
+    // H3: acquire handshake permit BEFORE spawning expensive work.
+    // Use try_acquire_owned so we never queue unlimited tasks.
+    let permit = match handshake_semaphore.clone().try_acquire_owned() {
+        Ok(p) => p,
+        Err(_) => {
+            eprintln!("handshake limit reached — rejecting {remote_ip}");
+            conn.close(0u32.into(), b"too many concurrent handshakes");
+            return None;
+        }
+    };
+
+    eprintln!("connection accepted from {remote_ip}");
+    let task = tokio::spawn(async move {
+        // H3: wrap the entire handshake + session in a timeout.
+        let result = tokio::time::timeout(
+            HANDSHAKE_TIMEOUT,
+            handle_session(
+                conn,
+                &store,
+                &dispatcher,
+                &session_manager,
+                server_device_id,
+            ),
+        )
+        .await;
+
+        // H3: release the permit when done (drop on scope exit).
+        drop(permit);
+
+        match result {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => eprintln!("session error: {e}"),
+            Err(_) => eprintln!("handshake/session timed out for {remote_ip}"),
+        }
+    });
+    Some(task)
+}
 /// Handles one authenticated client session: OPAQUE login, then streams
 /// inbound control messages to the dispatcher and outbound video/audio.
 async fn handle_session(
