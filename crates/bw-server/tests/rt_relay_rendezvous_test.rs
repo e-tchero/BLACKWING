@@ -37,49 +37,44 @@ fn key() -> (SigningKey, DeviceId) {
 /// `polls` is consumed one response per poll; missing entries mean "no
 /// intents". `accepts` is consumed one result per accepted intent; missing
 /// entries mean "rejected". `poll_count` counts polls for assertions.
+/// Type aliases for the complex nested types used in scripted relay
+/// control-plane fakes. Extracting these keeps the struct fields and
+/// method signatures readable and satisfies Clippy's very_complex_type
+/// guidance without obscuring test intent.
+type PollQueue = VecDeque<Vec<([u8; 16], DeviceId)>>;
+type AcceptQueue = VecDeque<Result<[u8; 32], RelayClientError>>;
+type PollResponse = Vec<([u8; 16], DeviceId)>;
+type AcceptResult = Result<[u8; 32], RelayClientError>;
 struct FakeControl {
-    polls: Mutex<VecDeque<Vec<([u8; 16], DeviceId)>>>,
-    accepts: Mutex<VecDeque<Result<[u8; 32], RelayClientError>>>,
+    polls: Mutex<PollQueue>,
+    accepts: Mutex<AcceptQueue>,
     poll_count: Arc<AtomicUsize>,
 }
 
 impl FakeControl {
     fn new(
-        polls: Vec<Vec<([u8; 16], DeviceId)>>,
-        accepts: Vec<Result<[u8; 32], RelayClientError>>,
+        poll_queue: Vec<Vec<([u8; 16], DeviceId)>>,
+        accept_queue: Vec<Result<[u8; 32], RelayClientError>>,
     ) -> Self {
         Self {
-            polls: Mutex::new(polls.into()),
-            accepts: Mutex::new(accepts.into()),
+            polls: Mutex::new(poll_queue.into()),
+            accepts: Mutex::new(accept_queue.into()),
             poll_count: Arc::new(AtomicUsize::new(0)),
         }
     }
 }
 
 impl RelayControl for FakeControl {
-    fn poll_pending_intents(
-        &self,
-    ) -> impl std::future::Future<Output = Result<Vec<([u8; 16], DeviceId)>, RelayClientError>> + Send
-    {
+    async fn poll_pending_intents(&self) -> Result<PollResponse, RelayClientError> {
         self.poll_count.fetch_add(1, Ordering::SeqCst);
-        let response = {
-            let mut q = self.polls.lock().unwrap_or_else(|e| e.into_inner());
-            q.pop_front().unwrap_or_default()
-        };
-        async move { Ok(response) }
+        let mut q = self.polls.lock().unwrap_or_else(|e| e.into_inner());
+        Ok(q.pop_front().unwrap_or_default())
     }
 
-    fn accept_connect(
-        &self,
-        _intent_id: [u8; 16],
-        _initiator: DeviceId,
-    ) -> impl std::future::Future<Output = Result<[u8; 32], RelayClientError>> + Send {
-        let response = {
-            let mut q = self.accepts.lock().unwrap_or_else(|e| e.into_inner());
-            q.pop_front()
-                .unwrap_or_else(|| Err(RelayClientError::Rejected("no result queued".into())))
-        };
-        async move { response }
+    async fn accept_connect(&self, _intent_id: [u8; 16], _initiator: DeviceId) -> AcceptResult {
+        let mut q = self.accepts.lock().unwrap_or_else(|e| e.into_inner());
+        q.pop_front()
+            .unwrap_or_else(|| Err(RelayClientError::Rejected("no result queued".into())))
     }
 }
 
@@ -239,22 +234,19 @@ async fn e_graceful_cancellation_never_hangs() {
     // driver must cancel cleanly when its task is aborted.
     struct NeverControl;
     impl RelayControl for NeverControl {
-        fn poll_pending_intents(
+        async fn poll_pending_intents(
             &self,
-        ) -> impl std::future::Future<Output = Result<Vec<([u8; 16], DeviceId)>, RelayClientError>> + Send
-        {
-            async {
-                std::future::pending::<()>().await;
-                unreachable!()
-            }
+        ) -> Result<Vec<([u8; 16], DeviceId)>, RelayClientError> {
+            std::future::pending::<()>().await;
+            unreachable!()
         }
 
-        fn accept_connect(
+        async fn accept_connect(
             &self,
             _intent_id: [u8; 16],
             _initiator: DeviceId,
-        ) -> impl std::future::Future<Output = Result<[u8; 32], RelayClientError>> + Send {
-            async { unreachable!() }
+        ) -> Result<[u8; 32], RelayClientError> {
+            unreachable!()
         }
     }
 
@@ -267,7 +259,10 @@ async fn e_graceful_cancellation_never_hangs() {
     task.abort();
 
     // A hard guard: cancellation must complete, not hang.
-    let outcome = tokio::time::timeout(Duration::from_secs(5), async { task.await }).await;
+    // Wait for the aborted task with a hard timeout; cancellation must
+    // complete, not hang. The timeout wrapper both bounds the wait and
+    // converts a hung task into a test failure.
+    let outcome = tokio::time::timeout(Duration::from_secs(5), task).await;
     assert!(outcome.is_ok(), "graceful cancellation must not hang");
     assert!(
         outcome.unwrap().is_err(),
@@ -283,24 +278,21 @@ async fn e_graceful_cancellation_never_hangs() {
 async fn d_systemic_failures_still_propagate() {
     struct FailPoll;
     impl RelayControl for FailPoll {
-        fn poll_pending_intents(
+        async fn poll_pending_intents(
             &self,
-        ) -> impl std::future::Future<Output = Result<Vec<([u8; 16], DeviceId)>, RelayClientError>> + Send
-        {
-            async {
-                Err(RelayClientError::Io(std::io::Error::new(
-                    std::io::ErrorKind::ConnectionRefused,
-                    "relay unreachable",
-                )))
-            }
+        ) -> Result<Vec<([u8; 16], DeviceId)>, RelayClientError> {
+            Err(RelayClientError::Io(std::io::Error::new(
+                std::io::ErrorKind::ConnectionRefused,
+                "relay unreachable",
+            )))
         }
 
-        fn accept_connect(
+        async fn accept_connect(
             &self,
             _intent_id: [u8; 16],
             _initiator: DeviceId,
-        ) -> impl std::future::Future<Output = Result<[u8; 32], RelayClientError>> + Send {
-            async { unreachable!() }
+        ) -> Result<[u8; 32], RelayClientError> {
+            unreachable!()
         }
     }
     let driver = RendezvousDriver::new(FailPoll, POLL_INTERVAL, INITIATOR_TIMEOUT);

@@ -5,45 +5,99 @@ on:
     branches: [ main ]
   pull_request:
     branches: [ main ]
+  workflow_dispatch:
 
-env:
-  CARGO_TERM_COLOR: always
-  RUSTFLAGS: ""
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  ci:
-    name: Build, Test, Lint
-    runs-on: windows-latest
+  validate:
+    name: ${{ matrix.os == 'ubuntu-latest' && 'Linux' || 'Windows' }} validation
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+
+    timeout-minutes: 15
+
+    env:
+      CARGO_TERM_COLOR: always
+      RUSTFLAGS: ""
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - name: Install Rust stable (GNU)
+      - name: Install Rust stable toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: stable-x86_64-pc-windows-gnu
           components: rustfmt, clippy
 
-      - name: Install MinGW
+      - name: Install MinGW toolchain (Windows only)
+        if: runner.os == 'Windows'
         run: |
           scoop install mingw
         shell: powershell
 
-      - name: Cache cargo registry
+      - name: Install Linux native dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            pkg-config \
+            libasound2-dev \
+            libx11-dev \
+            libxrandr-dev \
+            libxi-dev \
+            libxinerama-dev \
+            libxcursor-dev \
+            libwayland-dev \
+            libdbus-1-dev \
+            libgl-dev \
+            libvulkan-dev
+        shell: bash
+
+      - name: Cache Cargo artifacts
         uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-${{ steps.toolchain.outputs.rustc }}
 
       - name: cargo fmt --check
         run: cargo fmt --check
 
-      - name: cargo clippy --all-targets -- -D warnings
-        run: cargo clippy --all-targets -- -D warnings
+      - name: cargo check --workspace
+        run: |
+          cargo check --workspace${{ matrix.os == 'Linux' && ' --exclude bw-capture --exclude bw-input' || '' }}
 
-      - name: cargo test --all-targets
-        run: cargo test --all-targets
-        timeout-minutes: 10
+      - name: cargo check --workspace --all-features
+        run: |
+          cargo check --workspace --all-features${{ matrix.os == 'Linux' && ' --exclude bw-capture --exclude bw-input' || '' }}
+
+      - name: cargo clippy --workspace --all-targets --all-features -- -D warnings
+        run: |
+          cargo clippy --workspace --all-targets --all-features${{ matrix.os == 'Linux' && ' --exclude bw-capture --exclude bw-input' || '' }} -- -D warnings
+
+      - name: cargo test --workspace
+        run: |
+          cargo test --workspace${{ matrix.os == 'Linux' && ' --exclude bw-capture --exclude bw-input' || '' }}
+
+      - name: cargo test --workspace --all-features
+        run: |
+          cargo test --workspace --all-features${{ matrix.os == 'Linux' && ' --exclude bw-capture --exclude bw-input' || '' }}
+
+      - name: cargo bench --no-run --workspace
+        run: |
+          cargo bench --no-run --workspace${{ matrix.os == 'Linux' && ' --exclude bw-capture --exclude bw-input' || '' }}
