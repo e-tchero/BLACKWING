@@ -37,6 +37,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install Rust stable toolchain
+        id: toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -51,19 +52,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            pkg-config \
-            libasound2-dev \
-            libx11-dev \
-            libxrandr-dev \
-            libxi-dev \
-            libxinerama-dev \
-            libxcursor-dev \
-            libwayland-dev \
-            libdbus-1-dev \
-            libgl-dev \
-            libvulkan-dev
+          sudo apt-get install -y             build-essential             pkg-config             libasound2-dev             libx11-dev             libxrandr-dev             libxi-dev             libxinerama-dev             libxcursor-dev             libwayland-dev             libdbus-1-dev             libgl-dev             libvulkan-dev
         shell: bash
 
       - name: Cache Cargo artifacts
