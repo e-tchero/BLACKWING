@@ -30,7 +30,10 @@ use bw_crypto::random::{OsRandom, SecureRandom};
 use std::sync::Arc;
 
 use bw_auth::store::EnrollmentStore;
-use bw_capture::{CaptureBackend, CaptureThread, DxgiCaptureBackend};
+use bw_capture::{CaptureBackend, CaptureThread, DisplayInfo};
+
+#[cfg(target_os = "windows")]
+use bw_capture::DxgiCaptureBackend;
 use bw_encoder::EncoderPipeline;
 use bw_encoder::h264::OpenH264Backend;
 use bw_protocol::dispatcher::MessageDispatcher;
@@ -538,7 +541,7 @@ fn spawn_video_pipeline(out_tx: mpsc::Sender<ProtocolMessage>) {
 
     // Capture thread → cursor compositor → encoder pipeline → encoded frames.
     let (capture_thread, mut frame_rx) =
-        match CaptureThread::spawn(Box::new(capture), display, FRAME_CAPACITY) {
+        match CaptureThread::spawn(capture, display, FRAME_CAPACITY) {
             Ok(v) => v,
             Err(e) => {
                 eprintln!(
@@ -615,16 +618,27 @@ fn spawn_video_pipeline(out_tx: mpsc::Sender<ProtocolMessage>) {
     });
 }
 
-/// Starts the primary-display DXGI capture backend.
-fn start_capture() -> Option<(DxgiCaptureBackend, bw_capture::DisplayInfo)> {
-    let backend = DxgiCaptureBackend::new().ok()?;
-    let displays = backend.displays().ok()?;
-    let primary = displays
-        .iter()
-        .find(|d| d.is_primary)
-        .or_else(|| displays.first())?
-        .clone();
-    Some((backend, primary))
+/// Starts the primary-display capture backend.
+///
+/// Returns a boxed capture backend (Windows: DXGI; other platforms: none) and
+/// the primary display info. Non-Windows platforms return `None` and the video
+/// pipeline is disabled gracefully by the caller.
+fn start_capture() -> Option<(Box<dyn CaptureBackend>, DisplayInfo)> {
+    #[cfg(target_os = "windows")]
+    {
+        let backend = DxgiCaptureBackend::new().ok()?;
+        let displays = backend.displays().ok()?;
+        let primary = displays
+            .iter()
+            .find(|d| d.is_primary)
+            .or_else(|| displays.first())?
+            .clone();
+        Some((Box::new(backend), primary))
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        None
+    }
 }
 
 /// Spawns host audio capture, queuing each Opus frame as an AudioData message.

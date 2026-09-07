@@ -40,13 +40,17 @@ jobs:
         id: toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
+          targets: x86_64-pc-windows-gnu
           components: rustfmt, clippy
 
-      - name: Install MinGW toolchain (Windows only)
+      - name: Set up MSYS2 MinGW64 (Windows only)
         if: runner.os == 'Windows'
-        run: |
-          scoop install mingw
-        shell: powershell
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: mingw-w64-x86_64-gcc
+        shell: bash
 
       - name: Install Linux native dependencies
         if: runner.os == 'Linux'
