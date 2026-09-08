@@ -50,7 +50,6 @@ jobs:
           msystem: MINGW64
           update: true
           install: mingw-w64-x86_64-gcc
-        shell: bash
 
       - name: Install Linux native dependencies
         if: runner.os == 'Linux'
