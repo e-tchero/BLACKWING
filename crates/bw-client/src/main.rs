@@ -1254,7 +1254,7 @@ mod tests {
         let mut frame = vec![0u8; 4 * 4 * 4];
         blit_rgb_to_frame(&mut frame, &img, 4, 4, ScaleMode::NearestNeighbor);
         // Every pixel should be (200, 100, 50, 0xFF).
-        for px in frame.chunks_exact(4) {
+        for px in frame.as_chunks::<4>().0 {
             assert_eq!(&px[..3], &[200, 100, 50]);
             assert_eq!(px[3], 0xFF);
         }
@@ -1329,7 +1329,7 @@ mod tests {
 
         // With bilinear clamping, the 4x4 white source is blended across
         // the entire 16x16 destination.  Every pixel should be white.
-        for px in frame.chunks_exact(4) {
+        for px in frame.as_chunks::<4>().0 {
             assert_eq!(px[0], 255, "R should be 255, not stale 0xAA");
             assert_eq!(px[3], 0xFF, "alpha must be 0xFF");
         }
