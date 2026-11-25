@@ -10,8 +10,8 @@
 
 | Field | Value |
 |---|---|
-| **Last verified** | 2026-09-03 |
-| **Repository commit** | `6de4734` (HEAD of `main`) |
+| **Last verified** | 2026-11-25 |
+| **Repository commit** | `96b03bf` (HEAD of `main` at audit time) |
 | **Branch** | `main` |
 | **Remote** | `origin` → `https://github.com/e-tchero/BLACKWING.git` |
 | **Verification method** | Direct source inspection, `cargo test --workspace`, `cargo clippy`, `cargo bench --no-run`, `git log`, `git diff` |
@@ -198,7 +198,7 @@ dbg_macro = "deny"
 
 | Work | Status | Evidence |
 |---|---|---|
-| CI/CD pipeline | **SKELETON (stale)** | A tracked `.github/workflows/ci.yml` exists (`1444a36`, 2026-08-14) but is stale/incomplete: fmt/clippy/test only, missing `--all-features` and release-build steps |
+| CI/CD pipeline | **IMPLEMENTED; Windows benchmark duration under investigation** | `.github/workflows/ci.yml` runs fmt, workspace checks, Clippy, tests, all-features validation, and benchmark compilation on Linux and Windows. Run 34 (2026-10-16): Linux passed all listed steps; Windows passed fmt/check/Clippy/tests but benchmark compilation was cancelled at the 15-minute job timeout while compiling dependencies. Timeout raised to 30 minutes in the current PR; Windows benchmark success remains unverified. |
 | Cross-platform support | **NOT IMPLEMENTED** | Windows-only (DXGI, Win32 FFI) |
 | Production QUIC tuning | **NOT IMPLEMENTED** | Default quinn config |
 | Cursor bitmap rendering | **NOT IMPLEMENTED** | `CursorInfo.bitmap = None` always; only crosshair overlay |
@@ -474,7 +474,7 @@ Sender task → session.send_message() → QUIC stream → client
 | Limitation | Detail |
 |---|---|
 | Windows-only | DXGI capture and Win32 FFI are Windows-specific |
-| No CI/CD | No GitHub Actions workflow |
+| CI runtime | GitHub Actions workflow exists for Linux and Windows; Windows benchmark compilation exceeded the former 15-minute job timeout in the latest inspected run |
 | No cross-platform input injection | Linux/macOS backends not implemented |
 | Development-only TLS bypass (`--dev-insecure`) | `SkipServerVerification` reachable only via the explicit opt-in `--dev-insecure` development path; production always verifies via certificate pinning (H5) |
 | No production QUIC tuning | Default quinn MTU/congestion settings |
@@ -569,7 +569,7 @@ The project has completed the full remote desktop vertical slice. Potential next
 
 | Area | Priority | Status |
 |---|---|---|
-| CI/CD pipeline (GitHub Actions) | High | SKELETON — stale `.github/workflows/ci.yml` exists (`1444a36`), awaiting completion |
+| CI/CD pipeline (GitHub Actions) | High | IMPLEMENTED — Linux validation passed in run 34; Windows benchmark compilation exceeded the former 15-minute timeout; 30-minute timeout proposed in current PR |
 | Cross-platform capture (Linux/Wayland, macOS CGDisplay) | Medium | NOT STARTED |
 | Cross-platform input injection (X11, macOS) | Medium | NOT STARTED |
 | Production QUIC tuning | Medium | NOT STARTED |
