@@ -133,5 +133,5 @@ See [`WP_CHANGELOG.md`](WP_CHANGELOG.md) for the complete chronological record. 
 - WGC capture backend is a skeleton
 - DXGI Desktop Duplication allows one capture per output (no multi-client session yet)
 - TPM hardware security module is a stub (`unimplemented!()` in TPM backend — variant unreachable in normal paths)
-- CI workflow (`.github/workflows/ci.yml`) exists but is a stale skeleton awaiting completion
+- CI workflow (`.github/workflows/ci.yml`) runs formatting, workspace checks, Clippy, tests, all-features validation, and benchmark compilation on Linux and Windows. In the latest inspected run (2026-10-16), all Linux steps passed; Windows formatting, checks, Clippy, and tests passed, but benchmark compilation was cancelled at the 15-minute job timeout while dependencies were still compiling. The timeout is being raised to 30 minutes; a successful Windows benchmark run is not yet verified.
 - No file transfer, no multi-monitor selection
